@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  MICROSOFT
+}
+
+model User {
+  id            String       @id @default(uuid())
+  email         String       @unique
+  passwordHash  String?
+  firstName     String?
+  lastName      String?
+  avatarStorageKey String?
+  avatarUrl     String?
+  provider      AuthProvider @default(LOCAL)
+  providerId    String?
+  emailVerified Boolean      @default(false)
+  resumeBuilderEnabled Boolean @default(false)
+  onboardingCompleted Boolean @default(false)
+  resumeTemplateKey  String?
+  resumeTemplateFileName String?
+  promptFileKey      String?
+  promptFileName     String?
+  customPrompt       String?  @db.Text
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  refreshTokens          RefreshToken[]
+  passwordResetTokens    PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  resumeArchives         ResumeArchive[]
+  apiKeys                ApiKey[]
+  resumeGenerationJobs   ResumeGenerationJob[]
+
+  @@unique([provider, providerId])
+  @@index([email])
+}
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  userId     String
+  name       String
+  keyPrefix  String
+  keyHash    String    @unique
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model ResumeArchive {
+  id             String   @id @default(uuid())
+  userId         String
+  bidAt          DateTime
+  jobTitle       String
+  companyName    String
+  jobDescription String?  @db.Text
+  resumeFileName String
+  pdfFileName    String
+  /** Deprecated: files live on Backblaze; nullable for old rows. */
+  docxStorageKey String?
+  /** Deprecated: PDFs live on Backblaze; nullable for old rows. */
+  pdfStorageKey  String?
+  /** Backblaze DOCX download URL. */
+  docxUrl        String?  @db.Text
+  /** Backblaze PDF download URL. */
+  pdfUrl         String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, bidAt(sort: Desc)])
+  @@map("resume_archives")
+}
+
+model ResumeGenerationJob {
+  id          String   @id @default(uuid())
+  userId      String
+  url         String
+  status      String
+  message     String?
+  warning     String?
+  error       String?
+  archiveId   String?
+  jobTitle    String?
+  companyName String?
+  resumeName  String?
+  pdfFileName String?
+  pdfUrl      String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("resume_generation_jobs")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
