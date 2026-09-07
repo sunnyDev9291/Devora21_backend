@@ -6,3 +6,4 @@ dist/
 storage/*
 !storage/.gitkeep
 builtin-crawl-result.json
+hiringcafe-parse-result.json

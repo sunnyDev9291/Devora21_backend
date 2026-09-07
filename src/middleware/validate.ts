@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from "express";
-import { ZodSchema } from "zod";
+import { ZodTypeAny } from "zod";
 
-export function validateBody<T>(schema: ZodSchema<T>) {
+export function validateBody(schema: ZodTypeAny) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const result = schema.safeParse(req.body);
+    const result = schema.safeParse(req.body ?? {});
 
     if (!result.success) {
       res.status(400).json({
@@ -20,9 +20,9 @@ export function validateBody<T>(schema: ZodSchema<T>) {
   };
 }
 
-export function validateBody422<T>(schema: ZodSchema<T>) {
+export function validateBody422(schema: ZodTypeAny) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const result = schema.safeParse(req.body);
+    const result = schema.safeParse(req.body ?? {});
 
     if (!result.success) {
       const errors = result.error.flatten().fieldErrors as Record<string, string[]>;

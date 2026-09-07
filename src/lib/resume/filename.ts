@@ -74,7 +74,11 @@ export function resolveResumeFileName(
   return `${sanitizeBaseName(base)}.docx`;
 }
 
-/** Archive jobTitle = text before first "|" in content.title */
+/**
+ * Headline portion of AI resume `content.title` (text before first "|").
+ * Used for display/filename helpers — do NOT use for resume_archives.jobTitle
+ * (archives store the job posting title instead).
+ */
 export function archiveJobTitleFromContent(title: string): string {
   return titleHeadline(title) || title.trim() || "Resume";
 }

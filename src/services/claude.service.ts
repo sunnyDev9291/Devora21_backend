@@ -1,5 +1,5 @@
 import { env, aiMockEnabled } from "../config/env";
-import type { ChatCompletionsInput } from "../validators/ai.validator";
+import type { ClaudeChatInput } from "../validators/ai.validator";
 import {
   createMockChatCompletion,
   streamMockChatCompletion,
@@ -37,7 +37,7 @@ function claudeHeaders(): Record<string, string> {
   };
 }
 
-function splitMessages(input: ChatCompletionsInput): {
+function splitMessages(input: ClaudeChatInput): {
   system?: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
 } {
@@ -68,7 +68,7 @@ function splitMessages(input: ChatCompletionsInput): {
   };
 }
 
-function buildClaudeBody(input: ChatCompletionsInput, stream: boolean): Record<string, unknown> {
+function buildClaudeBody(input: ClaudeChatInput, stream: boolean): Record<string, unknown> {
   const { system, messages } = splitMessages(input);
 
   const body: Record<string, unknown> = {
@@ -127,7 +127,7 @@ export function normalizeModelContent(raw: string, jsonObject: boolean): string 
 }
 
 export async function createChatCompletion(
-  input: ChatCompletionsInput
+  input: ClaudeChatInput
 ): Promise<{ content: string; model: string }> {
   if (aiMockEnabled) {
     return createMockChatCompletion(input);
@@ -152,7 +152,7 @@ export async function createChatCompletion(
  * Caller writes these directly to the HTTP response body.
  */
 export async function streamChatCompletion(
-  input: ChatCompletionsInput,
+  input: ClaudeChatInput,
   onText: (text: string) => void
 ): Promise<void> {
   if (aiMockEnabled) {

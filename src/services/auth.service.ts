@@ -22,6 +22,10 @@ import type {
   ResetPasswordInput,
   VerifyEmailInput,
 } from "../validators/auth.validator";
+import {
+  listingUrlsForResponse,
+  type ListingUrls,
+} from "../lib/listing-urls";
 
 const SALT_ROUNDS = 12;
 
@@ -46,6 +50,7 @@ export interface SafeUser {
   promptFileKey: string | null;
   promptFileName: string | null;
   customPrompt: string | null;
+  listingUrls?: ListingUrls;
   createdAt: Date;
 }
 
@@ -65,8 +70,10 @@ export function toSafeUser(user: {
   promptFileKey?: string | null;
   promptFileName?: string | null;
   customPrompt?: string | null;
+  listingUrls?: unknown;
   createdAt: Date;
 }): SafeUser {
+  const listingUrls = listingUrlsForResponse(user.listingUrls);
   return {
     id: user.id,
     email: user.email,
@@ -83,6 +90,7 @@ export function toSafeUser(user: {
     promptFileKey: user.promptFileKey ?? null,
     promptFileName: user.promptFileName ?? null,
     customPrompt: user.customPrompt ?? null,
+    ...(listingUrls ? { listingUrls } : {}),
     createdAt: user.createdAt,
   };
 }

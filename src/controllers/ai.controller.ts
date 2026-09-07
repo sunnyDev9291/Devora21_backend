@@ -7,7 +7,8 @@ import { CLAUDE_MODEL, CLAUDE_MAX_OUTPUT_TOKENS, streamChatCompletion } from "..
 import * as apiKeyService from "../services/api-key.service";
 import { prisma } from "../lib/prisma";
 import type { AuthenticatedRequest } from "../middleware/auth";
-import type { ChatCompletionsInput } from "../validators/ai.validator";
+import type { ChatCompletionsInput, ClaudeChatInput } from "../validators/ai.validator";
+import { assertWorksWithEnglishTeam } from "../services/english-team-check.service";
 
 function serviceUnavailable(res: Response): void {
   res.status(503).json({ error: "Claude API is not configured" });
@@ -143,7 +144,7 @@ async function resolveAiUser(
 async function applyUserProfilePrompt(
   req: AuthenticatedRequest,
   body: ChatCompletionsInput
-): Promise<ChatCompletionsInput> {
+): Promise<ClaudeChatInput> {
   const nonSystemMessages = body.messages.filter((m) => m.role !== "system");
   const user = await resolveAiUser(req, body);
 
@@ -170,7 +171,10 @@ async function applyUserProfilePrompt(
     resumeJsonOutputContract(layout),
   ].join("\n");
 
-  const { userId: _userId, ...rest } = body;
+  const { userId: _userId, jobTitle: _jobTitle, jobDescription: _jobDescription, skipEnglishTeamGate: _skip, ...rest } =
+    body;
+
+
   // Claude has no true unlimited mode — use the sync API hard cap (64k).
   return {
     ...rest,
@@ -194,9 +198,23 @@ export async function chatCompletionsHandler(
     return;
   }
 
-  let input: ChatCompletionsInput;
+  const body = req.body as ChatCompletionsInput;
+
   try {
-    input = await applyUserProfilePrompt(req, req.body as ChatCompletionsInput);
+    // Gate unless user explicitly confirmed Continue creating.
+    await assertWorksWithEnglishTeam(body.jobTitle, body.jobDescription, {
+      skip: body.skipEnglishTeamGate === true,
+      userId: req.authUser?.id ?? body.userId,
+      context: "ai/chat/completions",
+    });
+  } catch (err) {
+    next(err);
+    return;
+  }
+
+  let input: ClaudeChatInput;
+  try {
+    input = await applyUserProfilePrompt(req, body);
   } catch (err) {
     next(err);
     return;
@@ -245,7 +263,17 @@ export function aiErrorHandler(
 
   console.error("AI proxy error:", err);
   const status = err instanceof AppError ? err.statusCode : 502;
-  res.status(status).json({
+  const body: {
+    error: string;
+    message: string;
+    code?: string;
+  } & Record<string, unknown> = {
     error: err.message || "Claude request failed",
-  });
+    message: err.message || "Claude request failed",
+  };
+  if (err instanceof AppError) {
+    if (err.code) body.code = err.code;
+    if (err.details) Object.assign(body, err.details);
+  }
+  res.status(status).json(body);
 }

@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import app from "./app";
 import {
   env,
@@ -14,6 +15,8 @@ import {
 import { ALLOWED_FRONTEND_ORIGINS } from "./config/frontend";
 import { verifyEmailTransport } from "./services/email.service";
 import { prisma } from "./lib/prisma";
+
+dns.setDefaultResultOrder("ipv4first");
 
 const server = app.listen(env.PORT, "0.0.0.0", async () => {
   console.log(`Server running on http://0.0.0.0:${env.PORT}`);

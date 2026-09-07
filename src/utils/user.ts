@@ -1,6 +1,7 @@
 import { AuthProvider } from "@prisma/client";
 import { emailVerificationRequired } from "../config/env";
 import type { SafeUser } from "../services/auth.service";
+import type { ListingUrls } from "../lib/listing-urls";
 
 export interface FrontendUser {
   id: string;
@@ -16,6 +17,7 @@ export interface FrontendUser {
   createdAt?: string;
   resumeTemplateFileName?: string | null;
   promptFileName?: string | null;
+  listingUrls?: ListingUrls;
 }
 
 function buildDisplayName(
@@ -61,6 +63,10 @@ export function formatUserResponse(user: SafeUser): FrontendUser {
 
   if (user.promptFileName) {
     formatted.promptFileName = user.promptFileName;
+  }
+
+  if (user.listingUrls && Object.keys(user.listingUrls).length > 0) {
+    formatted.listingUrls = user.listingUrls;
   }
 
   return formatted;

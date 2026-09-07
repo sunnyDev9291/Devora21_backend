@@ -31,6 +31,39 @@ function extractBearerToken(req: Request): string | undefined {
   return token || undefined;
 }
 
+function singleHeader(req: Request, name: string): string | undefined {
+  const raw = req.headers[name];
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
+  }
+  if (Array.isArray(raw) && raw[0]?.trim()) {
+    return raw[0].trim();
+  }
+  return undefined;
+}
+
+function extractForwardedUserToken(req: Request): string | undefined {
+  const raw = singleHeader(req, "x-user-authorization");
+  if (!raw) {
+    return undefined;
+  }
+  return raw.startsWith("Bearer ") ? raw.slice(7).trim() : raw;
+}
+
+async function resolveUserFromToken(token: string): Promise<ResolvedAuth | null> {
+  const apiUser = await apiKeyService.findUserByApiKey(token);
+  if (apiUser) {
+    return { user: apiUser, method: "apiKey" };
+  }
+
+  const jwtUser = await findUserByAccessToken(token);
+  if (jwtUser) {
+    return { user: jwtUser, method: "session" };
+  }
+
+  return null;
+}
+
 export async function resolveAuthenticatedUser(
   req: Request,
   res: Response
@@ -45,17 +78,20 @@ export async function resolveAuth(
   res: Response
 ): Promise<ResolvedAuth | null> {
   const bearer = extractBearerToken(req);
-  // Skip AI internal key here — it is not a user API key; fall through to cookies.
+  // Skip AI internal key here — it is not a user API key; fall through to
+  // X-User-Authorization / cookies (BFF Job Check and AI proxy).
   if (bearer && bearer !== env.AI_INTERNAL_API_KEY) {
-    const apiUser = await apiKeyService.findUserByApiKey(bearer);
-    if (apiUser) {
-      return { user: apiUser, method: "apiKey" };
+    const fromBearer = await resolveUserFromToken(bearer);
+    if (fromBearer) {
+      return fromBearer;
     }
+  }
 
-    // Also accept a user JWT as Bearer (some BFFs forward the access token).
-    const jwtUser = await findUserByAccessToken(bearer);
-    if (jwtUser) {
-      return { user: jwtUser, method: "session" };
+  const forwarded = extractForwardedUserToken(req);
+  if (forwarded) {
+    const fromForwarded = await resolveUserFromToken(forwarded);
+    if (fromForwarded) {
+      return fromForwarded;
     }
   }
 

@@ -1,5 +1,5 @@
-import { env } from "../config/env";
 import { AppError } from "../middleware/errorHandler";
+import { fetchZyteBrowserHtml } from "../lib/zyte-client";
 import {
   buildBuiltInListingPageUrl,
   DEFAULT_BUILTIN_CRAWL_URL,
@@ -10,27 +10,7 @@ import {
   type BuiltInListingParseResult,
 } from "../lib/job-discovery/builtin-parse";
 
-const ZYTE_EXTRACT_URL = "https://api.zyte.com/v1/extract";
-const ZYTE_TIMEOUT_MS = 120_000;
 const MAX_BUILTIN_CRAWL_PAGES = 50;
-
-type ZyteBrowserResponse = {
-  browserHtml?: string;
-  url?: string;
-  error?: string;
-  detail?: string;
-};
-
-function zyteAuthHeader(apiKey: string): string {
-  return `Basic ${Buffer.from(`${apiKey}:`, "utf8").toString("base64")}`;
-}
-
-function asString(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  return "";
-}
 
 export function isBuiltInListingUrl(url: string): boolean {
   try {
@@ -45,61 +25,10 @@ async function fetchBuiltInListingHtml(targetUrl: string): Promise<{
   html: string;
   pageUrl: string;
 }> {
-  if (!env.ZYTE_API_KEY) {
-    throw new AppError(503, "Zyte API is not configured");
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(ZYTE_EXTRACT_URL, {
-      method: "POST",
-      headers: {
-        Authorization: zyteAuthHeader(env.ZYTE_API_KEY),
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        url: targetUrl,
-        browserHtml: true,
-      }),
-      signal: AbortSignal.timeout(ZYTE_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Zyte request failed";
-    if (
-      message.includes("TimeoutError") ||
-      message.includes("aborted") ||
-      message.includes("timeout")
-    ) {
-      throw new AppError(504, "Timed out while fetching the Built In listing page");
-    }
-    throw new AppError(502, "Could not reach Zyte");
-  }
-
-  let payload: ZyteBrowserResponse;
-  try {
-    payload = (await response.json()) as ZyteBrowserResponse;
-  } catch {
-    throw new AppError(502, "Zyte returned an invalid response");
-  }
-
-  if (!response.ok) {
-    const detail =
-      asString(payload.error) ||
-      asString(payload.detail) ||
-      `Zyte request failed (${response.status})`;
-    throw new AppError(502, detail);
-  }
-
-  const html = asString(payload.browserHtml);
-  if (!html) {
-    throw new AppError(502, "Zyte returned an empty Built In listing page");
-  }
-
-  return {
-    html,
-    pageUrl: asString(payload.url) || targetUrl,
-  };
+  return fetchZyteBrowserHtml(
+    targetUrl,
+    "Zyte returned an empty Built In listing page"
+  );
 }
 
 export async function discoverBuiltInJobsFromUrl(

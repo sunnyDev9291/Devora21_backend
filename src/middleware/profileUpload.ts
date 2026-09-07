@@ -21,6 +21,12 @@ export function profileUploadHandler(
   res: Response,
   next: NextFunction
 ): void {
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  if (!contentType.includes("multipart/form-data")) {
+    next();
+    return;
+  }
+
   profileUpload(req, res, (err: unknown) => {
     if (!err) {
       next();

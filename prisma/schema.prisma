@@ -31,6 +31,8 @@ model User {
   promptFileKey      String?
   promptFileName     String?
   customPrompt       String?  @db.Text
+  /** Per-user job crawl listing URLs keyed by platform (builtin, hiringcafe, workable, workingnomads). */
+  listingUrls        Json?    @map("listing_urls")
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
@@ -83,6 +85,8 @@ model ResumeArchive {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, bidAt(sort: Desc)])
+  @@index([userId, companyName])
+  @@index([userId, jobTitle])
   @@map("resume_archives")
 }
 

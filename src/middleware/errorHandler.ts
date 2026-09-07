@@ -4,7 +4,9 @@ export class AppError extends Error {
   constructor(
     public statusCode: number,
     message: string,
-    public errors?: Record<string, string[]>
+    public errors?: Record<string, string[]>,
+    public code?: string,
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = "AppError";
@@ -18,12 +20,23 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   if (err instanceof AppError) {
-    const body: { error: string; message: string; errors?: Record<string, string[]> } = {
+    const body: {
+      error: string;
+      message: string;
+      code?: string;
+      errors?: Record<string, string[]>;
+    } & Record<string, unknown> = {
       error: err.message,
       message: err.message,
     };
+    if (err.code) {
+      body.code = err.code;
+    }
     if (err.errors) {
       body.errors = err.errors;
+    }
+    if (err.details) {
+      Object.assign(body, err.details);
     }
     res.status(err.statusCode).json(body);
     return;

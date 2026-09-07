@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { ZodSchema, ZodError } from "zod";
+import { ZodTypeAny, ZodError } from "zod";
 
 function formatValidationError(error: ZodError): string {
   const fieldErrors = error.flatten().fieldErrors;
@@ -8,7 +8,7 @@ function formatValidationError(error: ZodError): string {
   return firstMessage ?? "Invalid request body";
 }
 
-export function validateAiBody<T>(schema: ZodSchema<T>) {
+export function validateAiBody(schema: ZodTypeAny) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const result = schema.safeParse(req.body);
 

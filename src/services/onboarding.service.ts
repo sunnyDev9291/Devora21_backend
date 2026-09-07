@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { toSafeUser, type SafeUser } from "./auth.service";
@@ -9,12 +10,27 @@ import {
 } from "./profile-assets.service";
 import { readUserFile } from "./profile-storage.service";
 import { avatarContentType } from "../constants/profile-assets";
+import {
+  mergeListingUrls,
+  parseListingUrlsPatch,
+  type ListingUrls,
+} from "../lib/listing-urls";
+
+function listingUrlsDbValue(
+  listingUrls: ListingUrls
+): Prisma.InputJsonValue | typeof Prisma.DbNull {
+  return Object.keys(listingUrls).length > 0
+    ? (listingUrls as Prisma.InputJsonValue)
+    : Prisma.DbNull;
+}
 
 export interface ProfileMultipartInput {
   firstName?: string;
   lastName?: string;
   customPrompt?: string;
   onboardingCompleted?: boolean;
+  /** Patch of listing URLs; omit to leave unchanged. Empty string clears a platform. */
+  listingUrls?: ListingUrls;
   files: {
     avatar?: Express.Multer.File;
     resumeTemplate?: Express.Multer.File;
@@ -44,38 +60,49 @@ export function parseOnboardingMultipart(body: Record<string, unknown>): Omit<
     throw fieldError("onboardingCompleted", "onboardingCompleted must be true");
   }
 
+  const listingUrls = parseListingUrlsPatch(body);
+
   return {
     firstName,
     lastName,
     customPrompt: typeof body.customPrompt === "string" ? body.customPrompt : undefined,
     onboardingCompleted: true,
+    ...(listingUrls !== undefined ? { listingUrls } : {}),
   };
 }
 
-export function parseProfileMultipart(body: Record<string, unknown>): Omit<
-  ProfileMultipartInput,
-  "files"
-> {
+/** JSON and multipart share the same field names. */
+export function parseProfileBody(
+  body: Record<string, unknown> | undefined | null
+): Omit<ProfileMultipartInput, "files"> {
+  const source = body ?? {};
   const input: Omit<ProfileMultipartInput, "files"> = {};
 
-  if (body.firstName !== undefined) {
-    input.firstName = requireString(body.firstName, "firstName");
+  if (source.firstName !== undefined) {
+    input.firstName = requireString(source.firstName, "firstName");
   }
 
-  if (body.lastName !== undefined) {
-    input.lastName = requireString(body.lastName, "lastName");
+  if (source.lastName !== undefined) {
+    input.lastName = requireString(source.lastName, "lastName");
   }
 
-  if (typeof body.customPrompt === "string") {
-    input.customPrompt = body.customPrompt;
+  if (typeof source.customPrompt === "string") {
+    input.customPrompt = source.customPrompt;
   }
 
-  if (body.onboardingCompleted === "true" || body.onboardingCompleted === true) {
+  if (source.onboardingCompleted === "true" || source.onboardingCompleted === true) {
     input.onboardingCompleted = true;
+  }
+
+  const listingUrls = parseListingUrlsPatch(source);
+  if (listingUrls !== undefined) {
+    input.listingUrls = listingUrls;
   }
 
   return input;
 }
+
+export const parseProfileMultipart = parseProfileBody;
 
 async function applyProfileFiles(
   userId: string,
@@ -159,6 +186,11 @@ export async function completeOnboarding(
     input
   );
 
+  const listingUrls =
+    input.listingUrls !== undefined
+      ? mergeListingUrls(existing.listingUrls, input.listingUrls)
+      : undefined;
+
   const user = await prisma.user.update({
     where: { id: userId },
     data: {
@@ -166,6 +198,9 @@ export async function completeOnboarding(
       lastName: input.lastName!.trim(),
       onboardingCompleted: true,
       ...fileUpdates,
+      ...(listingUrls !== undefined
+        ? { listingUrls: listingUrlsDbValue(listingUrls) }
+        : {}),
     },
   });
 
@@ -185,7 +220,8 @@ export async function updateUserProfile(
     input.firstName !== undefined ||
     input.lastName !== undefined ||
     input.customPrompt !== undefined ||
-    input.onboardingCompleted === true;
+    input.onboardingCompleted === true ||
+    input.listingUrls !== undefined;
 
   const hasFileUpdate =
     Boolean(input.files.avatar) ||
@@ -211,6 +247,11 @@ export async function updateUserProfile(
   const shouldCompleteOnboarding =
     input.onboardingCompleted === true && !existing.onboardingCompleted;
 
+  const listingUrls =
+    input.listingUrls !== undefined
+      ? mergeListingUrls(existing.listingUrls, input.listingUrls)
+      : undefined;
+
   const user = await prisma.user.update({
     where: { id: userId },
     data: {
@@ -218,6 +259,9 @@ export async function updateUserProfile(
       ...(input.lastName !== undefined ? { lastName: input.lastName.trim() } : {}),
       ...fileUpdates,
       ...(shouldCompleteOnboarding ? { onboardingCompleted: true } : {}),
+      ...(listingUrls !== undefined
+        ? { listingUrls: listingUrlsDbValue(listingUrls) }
+        : {}),
     },
   });
 

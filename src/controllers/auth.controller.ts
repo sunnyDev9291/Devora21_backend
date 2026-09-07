@@ -124,7 +124,9 @@ export async function profileHandler(
 
     const input: onboardingService.ProfileMultipartInput = {
       ...buildProfileInput(req),
-      ...onboardingService.parseProfileMultipart(req.body as Record<string, unknown>),
+      ...onboardingService.parseProfileBody(
+        (req.body ?? {}) as Record<string, unknown>
+      ),
     };
 
     const user = await onboardingService.updateUserProfile(req.authUser.id, input);

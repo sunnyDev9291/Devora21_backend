@@ -1,4 +1,4 @@
-import type { ChatCompletionsInput } from "../validators/ai.validator";
+import type { ClaudeChatInput } from "../validators/ai.validator";
 
 export const MOCK_AI_MODEL = "mock-resume-v1";
 
@@ -58,7 +58,7 @@ const MOCK_RESUME_JSON = {
   note: "This is a mocked AI resume response for local/dev testing.",
 };
 
-function lastUserMessage(input: ChatCompletionsInput): string {
+function lastUserMessage(input: ClaudeChatInput): string {
   for (let i = input.messages.length - 1; i >= 0; i -= 1) {
     if (input.messages[i].role === "user") {
       return input.messages[i].content;
@@ -67,7 +67,7 @@ function lastUserMessage(input: ChatCompletionsInput): string {
   return "";
 }
 
-export function buildMockResumeContent(input: ChatCompletionsInput): string {
+export function buildMockResumeContent(input: ClaudeChatInput): string {
   const userText = lastUserMessage(input).slice(0, 500);
 
   if (input.jsonObject) {
@@ -108,7 +108,7 @@ export function buildMockResumeContent(input: ChatCompletionsInput): string {
 }
 
 export async function createMockChatCompletion(
-  input: ChatCompletionsInput
+  input: ClaudeChatInput
 ): Promise<{ content: string; model: string }> {
   // Small delay so the frontend can still exercise loading UI.
   await new Promise((resolve) => setTimeout(resolve, 250));
@@ -119,7 +119,7 @@ export async function createMockChatCompletion(
 }
 
 export async function streamMockChatCompletion(
-  input: ChatCompletionsInput,
+  input: ClaudeChatInput,
   onText: (text: string) => void
 ): Promise<void> {
   const content = buildMockResumeContent(input);

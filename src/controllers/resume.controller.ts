@@ -1,16 +1,18 @@
 import { Response, NextFunction } from "express";
+import { pipeline } from "node:stream/promises";
 import multer from "multer";
 import {
   archiveResume,
-  getResumeArchiveFile,
   getResumeArchiveFilePublic,
   listResumeArchives,
+  openResumeArchiveFileStream,
 } from "../services/resume-archive.service";
 import {
   enqueueResumeFromJob,
   getResumeFromJobStatus,
 } from "../services/resume-from-job.service";
 import type { ArchiveListFilters } from "../utils/archive-filters";
+import { parseExactFlag } from "../utils/archive-filters";
 import { AppError } from "../middleware/errorHandler";
 import { AuthenticatedRequest } from "../middleware/auth";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
@@ -20,12 +22,17 @@ function optionalQueryParam(value: unknown): string | undefined {
 }
 
 function parseArchiveListFilters(query: AuthenticatedRequest["query"]): ArchiveListFilters {
+  const jobTitle =
+    optionalQueryParam(query.jobTitle) || optionalQueryParam(query.title);
+
   return {
     company: optionalQueryParam(query.company),
+    jobTitle,
     jd: optionalQueryParam(query.jd),
     from: optionalQueryParam(query.from),
     to: optionalQueryParam(query.to),
     q: optionalQueryParam(query.q),
+    exact: parseExactFlag(query.exact),
   };
 }
 
@@ -93,6 +100,7 @@ export async function archiveResumeHandler(
     const resumeFileName = String(req.body?.resumeFileName ?? "").trim();
     const file = req.file;
 
+    // jobTitle = job posting title from the form (not the AI resume headline).
     if (!jobTitle || !companyName) {
       throw new AppError(400, "jobTitle and companyName are required");
     }
@@ -163,11 +171,15 @@ export async function downloadResumeArchiveDocxHandler(
     }
 
     const archiveId = String(req.params.id ?? "");
-    const file = await getResumeArchiveFile(userId, archiveId, "docx");
+    const file = await openResumeArchiveFileStream(userId, archiveId, "docx");
 
     res.setHeader("Content-Type", file.contentType);
     res.setHeader("Content-Disposition", contentDisposition("attachment", file.fileName));
-    res.status(200).send(file.buffer);
+    if (file.contentLength) {
+      res.setHeader("Content-Length", String(file.contentLength));
+    }
+    res.status(200);
+    await pipeline(file.stream as NodeJS.ReadableStream, res);
   } catch (err) {
     next(err);
   }
@@ -185,11 +197,15 @@ export async function downloadResumeArchivePdfHandler(
     }
 
     const archiveId = String(req.params.id ?? "");
-    const file = await getResumeArchiveFile(userId, archiveId, "pdf");
+    const file = await openResumeArchiveFileStream(userId, archiveId, "pdf");
 
     res.setHeader("Content-Type", file.contentType);
     res.setHeader("Content-Disposition", contentDisposition("inline", file.fileName));
-    res.status(200).send(file.buffer);
+    if (file.contentLength) {
+      res.setHeader("Content-Length", String(file.contentLength));
+    }
+    res.status(200);
+    await pipeline(file.stream as NodeJS.ReadableStream, res);
   } catch (err) {
     next(err);
   }

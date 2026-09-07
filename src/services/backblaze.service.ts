@@ -270,6 +270,25 @@ export async function createBackblazeDownloadUrl(storedUrl: string): Promise<str
  * Prefers authenticated S3 GetObject so private buckets still work.
  */
 export async function downloadBackblazeFileByUrl(fileUrl: string): Promise<Buffer> {
+  const opened = await openBackblazeReadStream(fileUrl);
+  const chunks: Buffer[] = [];
+  for await (const chunk of opened.stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const buffer = Buffer.concat(chunks);
+  if (!buffer.length) {
+    throw new AppError(502, "Empty file from Backblaze");
+  }
+  return buffer;
+}
+
+/**
+ * Open a readable stream for a Backblaze object (faster than buffering whole files).
+ */
+export async function openBackblazeReadStream(fileUrl: string): Promise<{
+  stream: NodeJS.ReadableStream;
+  contentLength?: number;
+}> {
   const key = extractKeyFromBackblazeUrl(fileUrl);
 
   if (key && backblazeEnabled) {
@@ -281,14 +300,18 @@ export async function downloadBackblazeFileByUrl(fileUrl: string): Promise<Buffe
           Key: key,
         })
       );
-      const bytes = await out.Body?.transformToByteArray();
-      if (!bytes?.length) {
+      const body = out.Body;
+      if (!body) {
         throw new AppError(502, "Empty file from Backblaze");
       }
-      return Buffer.from(bytes);
+      return {
+        stream: body as NodeJS.ReadableStream,
+        contentLength:
+          typeof out.ContentLength === "number" ? out.ContentLength : undefined,
+      };
     } catch (err) {
       if (err instanceof AppError) throw err;
-      // Fall through to HTTP fetch (e.g. public URL / presigned)
+      // Fall through to HTTP fetch
     }
   }
 
@@ -302,6 +325,13 @@ export async function downloadBackblazeFileByUrl(fileUrl: string): Promise<Buffe
   if (!response.ok) {
     throw new AppError(502, `Could not download file from storage (${response.status})`);
   }
+  if (!response.body) {
+    throw new AppError(502, "Empty file from storage");
+  }
 
-  return Buffer.from(await response.arrayBuffer());
+  const { Readable } = await import("node:stream");
+  return {
+    stream: Readable.fromWeb(response.body as import("node:stream/web").ReadableStream),
+    contentLength: Number(response.headers.get("content-length") || "") || undefined,
+  };
 }

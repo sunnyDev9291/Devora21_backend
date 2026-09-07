@@ -2,7 +2,6 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { applyContentToDocx } from "../lib/resume/apply-content-to-docx";
 import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
-import { archiveJobTitleFromContent } from "../lib/resume/filename";
 import { parseResumeTemplate } from "../lib/resume/parse-template";
 import { buildResumeSystemPrompt, buildResumeUserPrompt } from "../lib/resume/prompt";
 import { createChatCompletion, CLAUDE_MAX_OUTPUT_TOKENS } from "./claude.service";
@@ -10,6 +9,12 @@ import { getUserPrompt, getUserResumeTemplate } from "./onboarding.service";
 import { archiveResume } from "./resume-archive.service";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
 import { scrapeJobFromUrl } from "./zyte.service";
+import {
+  assertWorksWithEnglishTeam,
+  ENGLISH_TEAM_BLOCKED_MESSAGE,
+  ENGLISH_TEAM_REQUIRED_CODE,
+  isEnglishTeamBlockedError,
+} from "./english-team-check.service";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
 
 export type ResumeFromJobStatus =
@@ -65,6 +70,10 @@ export type ResumeFromJobStatusResponse = {
   companyName?: string;
   warning?: string;
   error?: string;
+  /** Present when resume was blocked by English-team gate. */
+  code?: typeof ENGLISH_TEAM_REQUIRED_CODE;
+  answer?: "No";
+  workWithEnglishTeam?: false;
   result?: ResumeFromJobResult;
   createdAt: string;
   updatedAt: string;
@@ -172,7 +181,8 @@ async function loadProfileName(userId: string): Promise<string> {
 async function runResumeFromJobPipeline(
   jobId: string,
   userId: string,
-  url: string
+  url: string,
+  skipEnglishTeamGate = false
 ): Promise<void> {
   try {
     await setJobStatus(jobId, "scraping", {
@@ -202,8 +212,19 @@ async function runResumeFromJobPipeline(
       jobTitle,
       companyName,
       message: scraped.warning
-        ? `Scraped ${companyName} — ${jobTitle} (with warnings); loading profile…`
-        : `Scraped ${companyName} — ${jobTitle}; loading profile template…`,
+        ? `Scraped ${companyName} — ${jobTitle} (with warnings); ${
+            skipEnglishTeamGate ? "skipping English-team gate…" : "checking English team…"
+          }`
+        : `Scraped ${companyName} — ${jobTitle}; ${
+            skipEnglishTeamGate ? "skipping English-team gate…" : "checking English team…"
+          }`,
+    });
+
+    // Gate unless user explicitly confirmed Continue creating.
+    await assertWorksWithEnglishTeam(jobTitle, jobDescription, {
+      skip: skipEnglishTeamGate,
+      userId,
+      context: `resume/from-job url=${url}`,
     });
 
     let templateBase64: string;
@@ -295,10 +316,11 @@ async function runResumeFromJobPipeline(
     }
 
     const resumeFileName = `${(content.fileName || "resume").replace(/\.docx$/i, "")}.docx`;
-    const archiveTitle = archiveJobTitleFromContent(content.title);
+    // Archive stores the job *posting* title (scraped), never the AI resume headline.
+    const postingJobTitle = jobTitle;
 
     await setJobStatus(jobId, "rendering", {
-      jobTitle: archiveTitle,
+      jobTitle: postingJobTitle,
       companyName,
       resumeName: resumeFileName,
       message: "Converting DOCX → PDF and uploading DOCX+PDF to Backblaze…",
@@ -306,7 +328,7 @@ async function runResumeFromJobPipeline(
 
     const archived = await archiveResume({
       userId,
-      jobTitle: archiveTitle,
+      jobTitle: postingJobTitle,
       companyName,
       jobDescription,
       datetime: new Date().toISOString(),
@@ -316,7 +338,7 @@ async function runResumeFromJobPipeline(
 
     await setJobStatus(jobId, "done", {
       archiveId: archived.id,
-      jobTitle: archiveTitle,
+      jobTitle: postingJobTitle,
       companyName,
       resumeName: archived.resumeName,
       pdfFileName: archived.pdfFileName,
@@ -358,7 +380,13 @@ export async function enqueueResumeFromJob(
     },
   });
 
-  void runResumeFromJobPipeline(job.id, userId, job.url);
+  void runResumeFromJobPipeline(
+    job.id,
+    userId,
+    job.url,
+    input.skipEnglishTeamGate === true
+  );
+
 
   return {
     jobId: job.id,
@@ -406,10 +434,19 @@ export async function getResumeFromJobStatus(
   };
 
   if (status === "error") {
+    const englishBlocked = isEnglishTeamBlockedError(job.error);
     return {
       ...base,
       step: Math.max(1, stepIndexForStatus("scraping")),
       progressPercent: 0,
+      ...(englishBlocked
+        ? {
+            code: ENGLISH_TEAM_REQUIRED_CODE,
+            answer: "No" as const,
+            workWithEnglishTeam: false as const,
+            error: job.error || ENGLISH_TEAM_BLOCKED_MESSAGE,
+          }
+        : {}),
     };
   }
 
