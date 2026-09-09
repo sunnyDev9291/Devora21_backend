@@ -8,12 +8,16 @@ export const profileUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: MAX_UPLOAD_BYTES,
-    files: 3,
+    files: 4,
   },
 }).fields([
   { name: "avatar", maxCount: 1 },
   { name: "resumeTemplate", maxCount: 1 },
   { name: "promptFile", maxCount: 1 },
+  // Compatibility aliases used by older/current frontend forms.
+  { name: "prompt", maxCount: 1 },
+  { name: "profilePrompt", maxCount: 1 },
+  { name: "customPromptFile", maxCount: 1 },
 ]);
 
 export function profileUploadHandler(
@@ -54,8 +58,21 @@ export type ProfileUploadFiles = {
   avatar?: Express.Multer.File[];
   resumeTemplate?: Express.Multer.File[];
   promptFile?: Express.Multer.File[];
+  prompt?: Express.Multer.File[];
+  profilePrompt?: Express.Multer.File[];
+  customPromptFile?: Express.Multer.File[];
 };
 
 export function getProfileUploadFiles(req: Request): ProfileUploadFiles {
-  return (req.files as ProfileUploadFiles | undefined) ?? {};
+  const files = (req.files as ProfileUploadFiles | undefined) ?? {};
+  const promptFile =
+    files.promptFile ??
+    files.prompt ??
+    files.profilePrompt ??
+    files.customPromptFile;
+
+  return {
+    ...files,
+    ...(promptFile ? { promptFile } : {}),
+  };
 }

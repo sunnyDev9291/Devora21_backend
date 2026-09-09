@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { toSafeUser, type SafeUser } from "./auth.service";
 import {
+  parsePromptFileContent,
   resolveCustomPromptText,
   saveAvatarFile,
   savePromptFile,
@@ -273,14 +274,44 @@ export async function getUserPrompt(userId: string): Promise<{
   fileName: string;
 }> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user?.customPrompt) {
+  if (!user) {
     throw new AppError(404, "Prompt not found");
   }
 
-  return {
-    content: user.customPrompt,
-    fileName: user.promptFileName ?? "prompt.txt",
-  };
+  const storedPrompt = user.customPrompt?.trim();
+  if (storedPrompt) {
+    return {
+      content: storedPrompt,
+      fileName: user.promptFileName ?? "prompt.txt",
+    };
+  }
+
+  // Recover legacy/inconsistent profiles where the prompt file exists but
+  // customPrompt was never populated. Backfill once so future reads use DB.
+  if (user.promptFileKey) {
+    try {
+      const buffer = await readUserFile(user.promptFileKey);
+      const fileName =
+        user.promptFileName ??
+        user.promptFileKey.split("/").pop() ??
+        "prompt.txt";
+      const content = parsePromptFileContent(buffer, "", fileName);
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { customPrompt: content },
+      });
+
+      return { content, fileName };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+
+  throw new AppError(404, "Prompt not found");
+
 }
 
 export async function getUserResumeTemplate(userId: string): Promise<{

@@ -243,8 +243,14 @@ async function runResumeFromJobPipeline(
     try {
       const prompt = await getUserPrompt(userId);
       customPrompt = prompt.content?.trim() || "";
-    } catch {
-      customPrompt = "";
+    } catch (err) {
+      if (err instanceof AppError && err.statusCode === 404) {
+        throw new AppError(
+          422,
+          "Profile prompt not found. Upload a prompt in your Devora21 profile before generating a resume."
+        );
+      }
+      throw err;
     }
     if (!customPrompt) {
       throw new AppError(
