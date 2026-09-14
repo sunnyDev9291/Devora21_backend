@@ -111,7 +111,7 @@ export async function resolveAuth(
 
   try {
     const tokens = await authService.refreshTokens(refreshToken);
-    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
     const user = await findUserByAccessToken(tokens.accessToken);
     if (!user) {
       return null;

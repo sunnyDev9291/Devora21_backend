@@ -114,12 +114,14 @@ model ResumeGenerationJob {
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
-  token     String   @unique
-  userId    String
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  revokedAt DateTime?
+  id         String   @id @default(uuid())
+  token      String   @unique
+  userId     String
+  expiresAt  DateTime
+  /** When true, refresh slides a 30-day cookie window. */
+  rememberMe Boolean  @default(false) @map("remember_me")
+  createdAt  DateTime @default(now())
+  revokedAt  DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

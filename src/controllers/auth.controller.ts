@@ -24,7 +24,7 @@ export async function registerHandler(
 ): Promise<void> {
   try {
     const { user, tokens } = await authService.register(req.body);
-    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
     res.status(201).json({ user: formatUserResponse(user) });
   } catch (err) {
     next(err);
@@ -38,7 +38,7 @@ export async function loginHandler(
 ): Promise<void> {
   try {
     const { user, tokens } = await authService.login(req.body);
-    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
     res.json({ user: formatUserResponse(user) });
   } catch (err) {
     next(err);
@@ -77,7 +77,7 @@ export async function refreshHandler(
 ): Promise<void> {
   try {
     const tokens = await authService.refreshTokens(req.cookies?.[REFRESH_TOKEN_COOKIE]);
-    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
     res.json({ message: "Token refreshed" });
   } catch (err) {
     next(err);
@@ -420,8 +420,11 @@ export function googleCallbackHandler(
       }
 
       try {
-        const { tokens } = await authService.loginGoogleUser(oauthProfile);
-        setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+        const { tokens } = await authService.loginGoogleUser(
+          oauthProfile,
+          flow.rememberMe === true
+        );
+        setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
 
         if (flow.login_success_url) {
           return res.redirect(flow.login_success_url);

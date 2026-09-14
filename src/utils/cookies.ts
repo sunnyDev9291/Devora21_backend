@@ -14,6 +14,8 @@ function getCookieOptions(maxAgeMs: number): CookieOptions {
     path: "/",
   };
 
+  // Optional host/parent domain (e.g. .devora21.com). Leave unset for host-only
+  // cookies on api.devora21.com — correct for Netlify → API cross-site auth.
   if (env.COOKIE_DOMAIN) {
     options.domain = env.COOKIE_DOMAIN;
   }
@@ -24,11 +26,21 @@ function getCookieOptions(maxAgeMs: number): CookieOptions {
 export function setAuthCookies(
   res: Response,
   accessToken: string,
-  refreshToken: string
+  refreshToken: string,
+  rememberMe = false
 ): void {
-  res.cookie(ACCESS_TOKEN_COOKIE, accessToken, getCookieOptions(getAccessTokenMaxAgeMs()));
-  res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, getCookieOptions(getRefreshTokenMaxAgeMs()));
+  res.cookie(
+    ACCESS_TOKEN_COOKIE,
+    accessToken,
+    getCookieOptions(getAccessTokenMaxAgeMs())
+  );
+  res.cookie(
+    REFRESH_TOKEN_COOKIE,
+    refreshToken,
+    getCookieOptions(getRefreshTokenMaxAgeMs(rememberMe))
+  );
 }
+
 export function clearAuthCookies(res: Response): void {
   const clearOptions: CookieOptions = {
     httpOnly: true,

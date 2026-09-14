@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { truthyFlagSchema } from "../lib/truthy-flag";
 
 export const registerSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -13,6 +14,8 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email: z.string().email("Invalid email address"),
   password: z.string().min(1, "Password is required"),
+  /** When true, refresh cookie lasts 30 days and slides on /auth/refresh. */
+  rememberMe: truthyFlagSchema.optional().default(false),
 });
 
 export const forgotPasswordSchema = z.object({

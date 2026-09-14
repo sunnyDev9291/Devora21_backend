@@ -11,8 +11,12 @@ const envSchema = z.object({
 
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
-  JWT_ACCESS_EXPIRES_IN: z.string().default("7d"),
-  JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
+  /** Short-lived access cookie/JWT (default 15m). */
+  JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
+  /** Refresh window when rememberMe is false (default 1d). */
+  JWT_REFRESH_EXPIRES_IN: z.string().default("1d"),
+  /** Refresh window when rememberMe is true (default 30d). */
+  JWT_REFRESH_REMEMBER_EXPIRES_IN: z.string().default("30d"),
 
   FRONTEND_URL: z.string().url().default("https://devora21-dev.netlify.app"),
   /** Comma-separated extra frontend origins (CORS + OAuth redirects). */

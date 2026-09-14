@@ -32,6 +32,7 @@ const SALT_ROUNDS = 12;
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
+  rememberMe: boolean;
 }
 
 export interface SafeUser {
@@ -95,20 +96,25 @@ export function toSafeUser(user: {
   };
 }
 
-async function createTokens(userId: string, email: string): Promise<AuthTokens> {
+async function createTokens(
+  userId: string,
+  email: string,
+  rememberMe = false
+): Promise<AuthTokens> {
   const payload = { sub: userId, email };
   const accessToken = signAccessToken(payload);
-  const refreshToken = signRefreshToken(payload);
+  const refreshToken = signRefreshToken({ ...payload, rememberMe });
 
   await prisma.refreshToken.create({
     data: {
       token: refreshToken,
       userId,
-      expiresAt: getRefreshTokenExpiry(),
+      expiresAt: getRefreshTokenExpiry(rememberMe),
+      rememberMe,
     },
   });
 
-  return { accessToken, refreshToken };
+  return { accessToken, refreshToken, rememberMe };
 }
 
 export async function register(
@@ -167,7 +173,8 @@ export async function login(
     throw new AppError(401, "Invalid email or password");
   }
 
-  const tokens = await createTokens(user.id, user.email);
+  const rememberMe = input.rememberMe === true;
+  const tokens = await createTokens(user.id, user.email, rememberMe);
 
   return { user: toSafeUser(user), tokens };
 }
@@ -223,7 +230,9 @@ export async function refreshTokens(
     data: { revokedAt: new Date() },
   });
 
-  return createTokens(payload.sub, payload.email);
+  // Preserve rememberMe so refresh slides the same 30d / 1d window.
+  const rememberMe = stored.rememberMe === true || payload.rememberMe === true;
+  return createTokens(payload.sub, payload.email, rememberMe);
 }
 
 export async function getCurrentUser(userId: string): Promise<SafeUser> {
@@ -383,7 +392,8 @@ export async function createGoogleUser(profile: OAuthProfile): Promise<SafeUser>
 }
 
 export async function loginGoogleUser(
-  profile: OAuthProfile
+  profile: OAuthProfile,
+  rememberMe = false
 ): Promise<{ user: SafeUser; tokens: AuthTokens }> {
   const email = profile.email.toLowerCase();
 
@@ -404,7 +414,7 @@ export async function loginGoogleUser(
     },
   });
 
-  const tokens = await createTokens(user.id, user.email);
+  const tokens = await createTokens(user.id, user.email, rememberMe === true);
   return { user: toSafeUser(user), tokens };
 }
 

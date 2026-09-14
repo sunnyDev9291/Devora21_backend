@@ -13,6 +13,8 @@ export interface OAuthFlowState {
   login_success_url?: string;
   login_fallback_url?: string;
   prompt?: string;
+  /** When true, OAuth login issues a 30-day sliding refresh cookie. */
+  rememberMe?: boolean;
 }
 
 interface SignedOAuthFlowState extends OAuthFlowState {
@@ -79,6 +81,13 @@ export function parseOAuthStartQuery(query: Record<string, unknown>): OAuthFlowS
     if (loginFallbackUrl) {
       state.login_fallback_url = requireAllowedUrl(loginFallbackUrl, "login_fallback_url");
     }
+
+    const rememberRaw = query.rememberMe ?? query.remember_me;
+    state.rememberMe =
+      rememberRaw === true ||
+      rememberRaw === 1 ||
+      rememberRaw === "true" ||
+      rememberRaw === "1";
   }
 
   const prompt = typeof query.prompt === "string" ? query.prompt : undefined;
@@ -113,6 +122,7 @@ export function verifyOAuthState(token: string | undefined): OAuthFlowState {
     login_success_url: decoded.login_success_url,
     login_fallback_url: decoded.login_fallback_url,
     prompt: decoded.prompt,
+    rememberMe: decoded.rememberMe === true,
   };
 }
 
