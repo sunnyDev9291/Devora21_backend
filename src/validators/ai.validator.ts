@@ -19,8 +19,13 @@ const optionalTrimmedString = z.preprocess((value) => {
   return value.trim();
 }, z.string());
 
-export const chatCompletionsSchema = z
-  .object({
+/** Only the literal JSON boolean true enables resume JSON mode. */
+const strictJsonObjectSchema = z.preprocess(
+  (value) => value === true,
+  z.boolean()
+);
+
+export const chatCompletionsSchema = z.object({
     messages: z.array(chatMessageSchema).min(1, "messages is required"),
     maxTokens: z
       .number()
@@ -29,7 +34,7 @@ export const chatCompletionsSchema = z
       .max(64_000)
       .optional()
       .default(64_000),
-    jsonObject: z.boolean().optional().default(false),
+    jsonObject: strictJsonObjectSchema.optional().default(false),
     /**
      * BFF / internal-key only: which user's profile prompt to apply.
      * Ignored when the request already has a session / user API key.
@@ -57,13 +62,6 @@ export const chatCompletionsSchema = z
       jobDescription,
       skipEnglishTeamGate,
     };
-  })
-  .refine(
-    (value) => value.jobTitle.length > 0 || value.jobDescription.length > 0,
-    {
-      message: "jobTitle or jobDescription is required for resume generation",
-      path: ["jobTitle"],
-    }
-  );
+  });
 
 export type ChatCompletionsInput = z.infer<typeof chatCompletionsSchema>;

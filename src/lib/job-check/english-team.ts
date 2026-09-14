@@ -1,9 +1,10 @@
 /** System prompt: English-team Yes/No only (not part of resume generation). */
 export const ENGLISH_TEAM_SYSTEM_PROMPT = [
-  "At first, Analyze the Job Title and Job Description internally.",
+  "Analyze the Job Title and Job Description internally.",
   "Answer only:",
-  "Yes — if the job mainly requires working in English with a US or global/international team.",
-  "No — if the job requires Spanish, Portuguese, or another non-English language for work.",
+  "No — only if the Job Title or Job Description explicitly states that Spanish or Portuguese is required for the role.",
+  "Yes — in all other cases.",
+  "Do not infer Spanish/Portuguese from country, city, or company location alone — require an explicit language requirement.",
   "Output only Yes or No.",
 ].join("\n");
 

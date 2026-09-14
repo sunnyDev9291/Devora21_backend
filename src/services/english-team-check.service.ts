@@ -11,7 +11,7 @@ import { createChatCompletion } from "./claude.service";
 export const ENGLISH_TEAM_REQUIRED_CODE = "ENGLISH_TEAM_REQUIRED";
 
 export const ENGLISH_TEAM_BLOCKED_MESSAGE =
-  "This job does not appear to require working with an English / US / global team. Resume generation was blocked.";
+  "This job explicitly requires Spanish or Portuguese. Resume generation was blocked.";
 
 const ENGLISH_TEAM_MAX_TOKENS = 16;
 

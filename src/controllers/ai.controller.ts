@@ -40,6 +40,46 @@ function singleHeader(
   return undefined;
 }
 
+function singleQuery(
+  req: AuthenticatedRequest,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    const raw = req.query[name];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+    if (Array.isArray(raw) && typeof raw[0] === "string" && raw[0].trim()) {
+      return raw[0].trim();
+    }
+  }
+  return undefined;
+}
+
+/** Job context may be supplied in camel/snake case, body or query. */
+function extractJobContext(
+  req: AuthenticatedRequest,
+  body: ChatCompletionsInput
+): { jobTitle: string; jobDescription: string } {
+  return {
+    jobTitle:
+      body.jobTitle ||
+      singleQuery(req, "jobTitle", "job_title") ||
+      "",
+    jobDescription:
+      body.jobDescription ||
+      singleQuery(req, "jobDescription", "job_description") ||
+      "",
+  };
+}
+
+/** Plain Application Q&A keeps the frontend-provided system/history messages. */
+function buildPlainChatInput(body: ChatCompletionsInput): ClaudeChatInput {
+  return {
+    messages: body.messages,
+    maxTokens: body.maxTokens,
+    jsonObject: false,
+  };
+}
+
 async function loadResumeUser(userId: string): Promise<{
   id: string;
   email: string;
@@ -138,8 +178,8 @@ async function resolveAiUser(
 }
 
 /**
- * Profile prompt is the ONLY system instruction.
- * Any client/BFF system messages are stripped and ignored.
+ * Resume mode only: profile prompt is the writing system instruction.
+ * Any client/BFF system messages are stripped and ignored in resume mode.
  */
 async function applyUserProfilePrompt(
   req: AuthenticatedRequest,
@@ -199,22 +239,38 @@ export async function chatCompletionsHandler(
   }
 
   const body = req.body as ChatCompletionsInput;
-
-  try {
-    // Gate unless user explicitly confirmed Continue creating.
-    await assertWorksWithEnglishTeam(body.jobTitle, body.jobDescription, {
-      skip: body.skipEnglishTeamGate === true,
-      userId: req.authUser?.id ?? body.userId,
-      context: "ai/chat/completions",
-    });
-  } catch (err) {
-    next(err);
-    return;
-  }
-
   let input: ClaudeChatInput;
+
   try {
-    input = await applyUserProfilePrompt(req, body);
+    // Only literal JSON boolean true means resume generation.
+    if (body.jsonObject === true) {
+      const jobContext = extractJobContext(req, body);
+      if (!jobContext.jobTitle && !jobContext.jobDescription) {
+        throw new AppError(
+          400,
+          "jobTitle or jobDescription is required for resume generation"
+        );
+      }
+
+      // Resume mode keeps the existing English-team gate unless explicitly skipped.
+      await assertWorksWithEnglishTeam(
+        jobContext.jobTitle,
+        jobContext.jobDescription,
+        {
+          skip: body.skipEnglishTeamGate === true,
+          userId: req.authUser?.id ?? body.userId,
+          context: "ai/chat/completions",
+        }
+      );
+
+      input = await applyUserProfilePrompt(req, {
+        ...body,
+        ...jobContext,
+      });
+    } else {
+      // Application Q&A is ordinary chat: no resume gate/profile prompt override.
+      input = buildPlainChatInput(body);
+    }
   } catch (err) {
     next(err);
     return;
