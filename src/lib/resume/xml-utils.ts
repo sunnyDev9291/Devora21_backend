@@ -50,25 +50,65 @@ export function getFirstRunProps(pXml: string): string {
   return any?.[0] ?? "";
 }
 
-export function replaceParagraphContent(pXml: string, runsXml: string): string {
+/**
+ * Shared left tab stop for skill category lines (twips).
+ * One POS for every line so tech items form a vertical column.
+ * max(2200, ceil(((longestLabel + 2) * 140 + 400) / 180) * 180)
+ */
+export function estimateSkillsTabStopTwips(categoryLabels: string[]): number {
+  const longest = categoryLabels.reduce((max, label) => {
+    const len = label.replace(/:$/, "").trim().length;
+    return Math.max(max, len);
+  }, 0);
+  const raw = (longest + 2) * 140 + 400;
+  const rounded = Math.ceil(raw / 180) * 180;
+  return Math.max(2200, rounded);
+}
+
+/** Inject shared left tab stop + hanging indent into paragraph properties. */
+export function upsertParagraphTabsAndHanging(pPr: string, posTwips: number): string {
+  const tabsXml = `<w:tabs><w:tab w:val="left" w:pos="${posTwips}"/></w:tabs>`;
+  const indXml = `<w:ind w:left="${posTwips}" w:hanging="${posTwips}"/>`;
+
+  let props = pPr;
+  if (!props || props === "<w:pPr/>" || props === "<w:pPr></w:pPr>") {
+    return `<w:pPr>${tabsXml}${indXml}</w:pPr>`;
+  }
+
+  props = props
+    .replace(/<w:tabs\b[^/]*\/>/g, "")
+    .replace(/<w:tabs\b[^>]*>[\s\S]*?<\/w:tabs>/g, "")
+    .replace(/<w:ind\b[^/]*\/>/g, "")
+    .replace(/<w:ind\b[^>]*>[\s\S]*?<\/w:ind>/g, "");
+
+  if (/<\/w:pPr>/.test(props)) {
+    return props.replace(/<\/w:pPr>/, `${tabsXml}${indXml}</w:pPr>`);
+  }
+  return props.replace(/<w:pPr([^>]*)\/>/, `<w:pPr$1>${tabsXml}${indXml}</w:pPr>`);
+}
+
+export function replaceParagraphContent(
+  pXml: string,
+  runsXml: string,
+  pPrOverride?: string
+): string {
   const open = pXml.match(/^<w:p\b[^>]*>/)?.[0] ?? "<w:p>";
-  const pPr = getParagraphProps(pXml);
+  const pPr = pPrOverride ?? getParagraphProps(pXml);
   return `${open}${pPr}${runsXml}</w:p>`;
 }
 
 /**
  * Preserve base run formatting (font/color/size) and toggle bold only.
- * Also strip nested bold-on/off pairs Word sometimes emits as <w:b w:val="0"/>.
+ * Always use Latin <w:b/> (not only <w:bCs/>) so bold shows in PDF.
  */
 function cleanRPrForBold(rPr: string, bold: boolean): string {
   let props = rPr;
   if (!props || props === "<w:rPr/>" || props === "<w:rPr></w:rPr>") {
     return bold ? "<w:rPr><w:b/><w:bCs/></w:rPr>" : "<w:rPr/>";
   }
-  // Remove existing bold markers (including w:val="0|false")
   props = props
-    .replace(/<w:b\b[^(/]*\/>/g, "")
-    .replace(/<w:bCs\b[^(/]*\/>/g, "")
+    .replace(/<w:b\b[^/]*\/>/g, "")
+    .replace(/<w:bCs\b[^/]*\/>/g, "")
     .replace(/<w:b\b[^>]*>[\s\S]*?<\/w:b>/g, "")
     .replace(/<w:bCs\b[^>]*>[\s\S]*?<\/w:bCs>/g, "");
   if (bold) {
@@ -85,6 +125,11 @@ function makeRun(text: string, rPr: string, bold: boolean): string {
   const props = cleanRPrForBold(rPr, bold);
   const space = /^\s|\s$/.test(text) ? ' xml:space="preserve"' : "";
   return `<w:r>${props}<w:t${space}>${escapeXml(text)}</w:t></w:r>`;
+}
+
+function makeTabRun(rPr: string): string {
+  const props = cleanRPrForBold(rPr, false);
+  return `<w:r>${props}<w:tab/></w:r>`;
 }
 
 /**
@@ -112,17 +157,72 @@ export function runsFromMarkdown(text: string, baseRPr = ""): string {
   return parts.join("");
 }
 
-/** Skills category line: bold "Label:" + plain value */
-export function runsForCategorySkillLine(label: string, value: string, baseRPr = ""): string {
-  const labelText = label.endsWith(":") ? label : `${label}:`;
+/**
+ * Skills category line runs: bold label + plain colon + TAB + plain values.
+ * Do NOT put a normal space after the colon — the tab creates the column gap.
+ * Preserves template run props (Franco blue color, size, fonts).
+ */
+export function runsForCategorySkillLine(
+  label: string,
+  value: string,
+  baseRPr = "",
+  _colonSuffix = ":"
+): string {
+  const bare = label.replace(/:$/, "").trim();
+  void _colonSuffix;
   return (
-    makeRun(`${labelText} `, baseRPr, true) + makeRun(value.trim(), baseRPr, false)
+    makeRun(bare, baseRPr, true) +
+    makeRun(":", baseRPr, false) +
+    makeTabRun(baseRPr) +
+    makeRun(value.trim(), baseRPr, false)
   );
+}
+
+/** Franco / category templates use bare ":" then TAB. */
+export function detectColonSuffix(_sampleLine: string): string {
+  void _sampleLine;
+  return ":";
 }
 
 export function setParagraphMarkdown(pXml: string, text: string): string {
   const rPr = getFirstRunProps(pXml);
   return replaceParagraphContent(pXml, runsFromMarkdown(text, rPr));
+}
+
+export type SkillCategoryFillMode = "tab-hanging";
+
+/**
+ * Always use an explicit shared left tab stop + hanging indent.
+ * Bare <w:tab/> with only defaultTabStop (Franco XML) looks uneven in
+ * Word and often collapses to a normal space in LibreOffice PDF.
+ */
+export function detectSkillCategoryFillMode(
+  _skillParagraphXmls: string[]
+): SkillCategoryFillMode {
+  void _skillParagraphXmls;
+  return "tab-hanging";
+}
+
+export function setCategorySkillParagraph(
+  pXml: string,
+  label: string,
+  value: string,
+  tabStopTwips: number,
+  colonSuffix = ":",
+  _mode: SkillCategoryFillMode = "tab-hanging"
+): string {
+  void _mode;
+  const rPr = getFirstRunProps(pXml);
+  // Preserve template spacing/color in pPr; inject one shared tab stop + hanging.
+  const pPr = upsertParagraphTabsAndHanging(
+    getParagraphProps(pXml),
+    tabStopTwips
+  );
+  return replaceParagraphContent(
+    pXml,
+    runsForCategorySkillLine(label, value, rPr, colonSuffix),
+    pPr
+  );
 }
 
 export function rebuildDocumentXml(originalXml: string, paragraphs: string[]): string {
@@ -132,7 +232,6 @@ export function rebuildDocumentXml(originalXml: string, paragraphs: string[]): s
   }
 
   const bodyInner = bodyMatch[1];
-  // Preserve sectPr at end of body
   const sectPrMatch = bodyInner.match(/<w:sectPr[\s\S]*?<\/w:sectPr>\s*$/);
   const sectPr = sectPrMatch?.[0] ?? "";
   const newBody = `${paragraphs.join("")}${sectPr}`;

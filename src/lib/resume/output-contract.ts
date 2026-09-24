@@ -1,7 +1,5 @@
 /**
- * Shared resume JSON contract appended after the profile prompt.
- * Writing style/content rules stay in the profile prompt only;
- * this block only forces a parseable, complete JSON shape.
+ * Minimal JSON shape only. All content/style rules live in the profile writing prompt.
  */
 export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bullets"): string {
   const experienceShape =
@@ -28,20 +26,18 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
     }`;
 
   return [
-    "OUTPUT CONTRACT (required — do not skip; follow the profile prompt for all wording):",
+    "JSON OUTPUT SHAPE (structural only — content follows the profile writing prompt):",
     "Return ONLY one valid JSON object (no markdown fences, no commentary).",
     "Use EXACTLY these top-level keys:",
-    '{',
+    "{",
     '  "title": "<non-empty string>",',
     '  "summary": "<non-empty string>",',
     '  "skills": "<non-empty string — NOT an array, NOT an object>",',
     '  "fileName": "<optional string>",',
     `  "experiences": [ ${experienceShape} ]`,
     "}",
-    "CRITICAL:",
-    '- "title", "summary", and "skills" MUST be non-empty strings.',
-    '- "skills" MUST be a single string (use newlines or commas inside the string). Never return skills as a JSON array.',
-    "- Do not nest title/summary/skills under personalInfo or content.",
-    "- Do not leave these fields blank.",
+    'Put company/dates from the frozen template jobs. Put role/bullets/projects text per the profile writing prompt.',
+    '"skills" must be one string (use newlines inside it if the profile prompt uses category lines).',
+    "Do not nest title/summary/skills under personalInfo or content.",
   ].join("\n");
 }

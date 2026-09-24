@@ -19,13 +19,22 @@ const optionalTrimmedString = z.preprocess((value) => {
   return value.trim();
 }, z.string());
 
+/** Optional long writing-prompt override from the client. */
+const optionalPromptOverride = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().max(50_000).optional());
+
 /** Only the literal JSON boolean true enables resume JSON mode. */
 const strictJsonObjectSchema = z.preprocess(
   (value) => value === true,
   z.boolean()
 );
 
-export const chatCompletionsSchema = z.object({
+export const chatCompletionsSchema = z
+  .object({
     messages: z.array(chatMessageSchema).min(1, "messages is required"),
     maxTokens: z
       .number()
@@ -44,7 +53,11 @@ export const chatCompletionsSchema = z.object({
     job_title: optionalTrimmedString.optional().default(""),
     jobDescription: optionalTrimmedString.optional().default(""),
     job_description: optionalTrimmedString.optional().default(""),
-    /** User confirmed "Continue creating" after ENGLISH_TEAM_REQUIRED. */
+    /** Fresh writing prompt from frontend (preferred over profile store). */
+    customPrompt: optionalPromptOverride,
+    profilePrompt: optionalPromptOverride,
+    promptContent: optionalPromptOverride,
+    /** Ignored no-op kept for older clients that still send the skip flag. */
     skipEnglishTeamGate: truthyFlagSchema.optional().default(false),
     skip_english_team_gate: truthyFlagSchema.optional().default(false),
   })
@@ -60,6 +73,9 @@ export const chatCompletionsSchema = z.object({
       userId: value.userId,
       jobTitle,
       jobDescription,
+      customPrompt: value.customPrompt,
+      profilePrompt: value.profilePrompt,
+      promptContent: value.promptContent,
       skipEnglishTeamGate,
     };
   });

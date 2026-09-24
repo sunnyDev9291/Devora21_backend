@@ -32,6 +32,29 @@ export function isDatesLine(t: string): boolean {
   );
 }
 
+/**
+ * Joao/Franco workplace line under the job header
+ * (e.g. "Indianapolis, Indiana, USA | Remote | Contract").
+ * Must stay frozen — never treated as a job header or bullet.
+ */
+export function looksLikeLocationLine(text: string): boolean {
+  if (!text || text.length > 120) return false;
+  if (isDatesLine(text)) return false;
+  if (PROJECT_FIELD_RE.test(text)) return false;
+  // Franco: "City, State, Country | Remote | Contract"
+  if (/\|\s*(remote|hybrid|on[- ]?site|onsite|wfh)\b/i.test(text)) return true;
+  if (/\|.+\|\s*(contract|full\s*time|part\s*time|permanent|freelance)\b/i.test(text)) {
+    return true;
+  }
+  if (/^(remote|hybrid|on[- ]?site|onsite)(\b|[|,·])/i.test(text) && text.split(/\s+/).length <= 8) {
+    return true;
+  }
+  if (/^[A-Za-zÀ-ÿ .'-]{2,40}\s*\|\s*[A-Za-zÀ-ÿ .'-]{2,30}$/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 /** Combined header: "Role, Company, 08/2023 – 05/2026" */
 export function isCombinedJobHeader(text: string): boolean {
   if (!text || text.length < 8) return false;
@@ -46,9 +69,12 @@ export function isJobHeaderParagraph(pXml: string, text: string): boolean {
   if (!text) return false;
   if (looksLikeBullet(pXml, text)) return false;
   if (PROJECT_FIELD_RE.test(text)) return false;
+  // Franco/Joao location lines often reuse Heading3 — never treat as a new job.
+  if (looksLikeLocationLine(text)) return false;
   const style = getParagraphStyle(pXml).toLowerCase();
-  if (/^heading/.test(style)) return true;
   if (isCombinedJobHeader(text)) return true;
+  if (/titleofexperience/i.test(style)) return true;
+  if (/^heading/.test(style)) return true;
   return false;
 }
 
@@ -165,6 +191,7 @@ function splitExperienceJobs(
         continue;
       }
       if (looksLikeBullet(paragraphs[j], t) || isProjectField(t)) break;
+      if (looksLikeLocationLine(t)) break;
       if (isJobHeaderParagraph(paragraphs[j], t) && j !== blockStart) break;
       headerLines.push({ index: j, text: t });
       j += 1;
@@ -202,11 +229,27 @@ function splitExperienceJobs(
     const projectBlocks: TemplateJobSkeleton["projectBlocks"] = [];
     const headerIdxSet = new Set([companyParaIndex, roleParaIndex, datesParaIndex]);
 
+    // Location line sits after header (role/company/dates), before bullets — keep frozen.
+    let locationParaIndex: number | undefined;
+    const afterHeader =
+      Math.max(datesParaIndex, roleParaIndex, companyParaIndex, blockStart) + 1;
+    for (let p = afterHeader; p < blockEnd; p += 1) {
+      const t = paragraphPlainText(paragraphs[p]);
+      if (!t) continue;
+      if (looksLikeBullet(paragraphs[p], t) || isProjectField(t)) break;
+      if (looksLikeLocationLine(t)) {
+        locationParaIndex = p;
+        headerIdxSet.add(p);
+      }
+      break;
+    }
+
     if (layout === "bullets") {
       for (let p = blockStart; p < blockEnd; p += 1) {
         if (headerIdxSet.has(p)) continue;
         const t = paragraphPlainText(paragraphs[p]);
         if (!t) continue;
+        if (looksLikeLocationLine(t)) continue;
         // Only real list/bullet paragraphs — never Heading* job titles.
         if (looksLikeBullet(paragraphs[p], t)) {
           bulletParaIndices.push(p);
@@ -214,6 +257,9 @@ function splitExperienceJobs(
       }
     } else {
       let p = Math.max(datesParaIndex, roleParaIndex, companyParaIndex) + 1;
+      if (locationParaIndex !== undefined) {
+        p = Math.max(p, locationParaIndex + 1);
+      }
       while (p < blockEnd) {
         const t = paragraphPlainText(paragraphs[p]);
         if (!t) {
@@ -225,6 +271,10 @@ function splitExperienceJobs(
           continue;
         }
         if (isJobHeaderParagraph(paragraphs[p], t)) break;
+        if (looksLikeLocationLine(t)) {
+          p += 1;
+          continue;
+        }
 
         const nameParaIndex = p;
         const name = t;
@@ -264,6 +314,7 @@ function splitExperienceJobs(
       companyParaIndex,
       roleParaIndex,
       datesParaIndex,
+      locationParaIndex,
       bulletParaIndices,
       projectBlocks,
     };

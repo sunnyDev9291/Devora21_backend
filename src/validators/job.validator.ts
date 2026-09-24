@@ -260,6 +260,71 @@ export type WorkingNomadsJobCrawlResult = {
   jobs: WorkingNomadsJobDiscoveryItem[];
 };
 
+const optionalCountryName = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().min(2).max(80).optional());
+
+/** POST /jobs/crawl/himalayas — country name only (not a listing URL). */
+export const crawlHimalayasSchema = z
+  .object({
+    country: optionalCountryName,
+    countryName: optionalCountryName,
+  })
+  .transform((value) => ({
+    country: value.country ?? value.countryName,
+    countryName: value.countryName ?? value.country,
+  }));
+
+export type CrawlHimalayasInput = z.infer<typeof crawlHimalayasSchema>;
+
+export type HimalayasJobDiscoveryItem = {
+  jobId: string;
+  companyName: string;
+  jobTitle: string;
+  jobUrl: string;
+};
+
+export type HimalayasJobCrawlResult = {
+  sourceUrl: string;
+  platform: "himalayas";
+  pagesScraped: number;
+  totalCount: number;
+  jobs: HimalayasJobDiscoveryItem[];
+};
+
+/** POST /jobs/crawl/getonboard — country name only (not a listing URL). */
+export const crawlGetOnBoardSchema = z
+  .object({
+    country: optionalCountryName,
+    countryName: optionalCountryName,
+  })
+  .transform((value) => ({
+    country: value.country ?? value.countryName,
+    countryName: value.countryName ?? value.country,
+  }));
+
+export type CrawlGetOnBoardInput = z.infer<typeof crawlGetOnBoardSchema>;
+
+export type GetOnBoardJobDiscoveryItem = {
+  jobId: string;
+  companyName: string;
+  jobTitle: string;
+  jobUrl: string;
+};
+
+export type GetOnBoardJobCrawlResult = {
+  sourceUrl: string;
+  platform: "getonboard";
+  country: string;
+  countryCode: string;
+  pagesScraped: number;
+  totalCount: number;
+  jobs: GetOnBoardJobDiscoveryItem[];
+};
+
 /** POST /jobs/check/english-team — Yes/No English-team analysis. */
 export const checkEnglishTeamSchema = z
   .object({

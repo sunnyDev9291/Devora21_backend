@@ -183,16 +183,17 @@ export async function logout(
   refreshToken: string | undefined,
   userId?: string
 ): Promise<void> {
-  if (userId) {
-    await revokeAllRefreshTokens(userId);
-    return;
-  }
-
+  // Prefer revoking only this session's refresh token so other devices/tabs keep working.
   if (refreshToken) {
     await prisma.refreshToken.updateMany({
       where: { token: refreshToken, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    return;
+  }
+
+  if (userId) {
+    await revokeAllRefreshTokens(userId);
   }
 }
 
@@ -203,6 +204,11 @@ export async function revokeAllRefreshTokens(userId: string): Promise<void> {
   });
 }
 
+/**
+ * Re-issue access token only — keep the same refresh token string.
+ * Rotating refresh on every /auth/me or parallel API call caused Set-Cookie
+ * races (many tabs/requests → last cookie wins → earlier tabs look logged out).
+ */
 export async function refreshTokens(
   refreshToken: string | undefined
 ): Promise<AuthTokens> {
@@ -225,14 +231,14 @@ export async function refreshTokens(
     throw new AppError(401, "Invalid or expired refresh token");
   }
 
-  await prisma.refreshToken.update({
-    where: { id: stored.id },
-    data: { revokedAt: new Date() },
+  const rememberMe = stored.rememberMe === true || payload.rememberMe === true;
+
+  const accessToken = signAccessToken({
+    sub: payload.sub,
+    email: payload.email,
   });
 
-  // Preserve rememberMe so refresh slides the same 30d / 1d window.
-  const rememberMe = stored.rememberMe === true || payload.rememberMe === true;
-  return createTokens(payload.sub, payload.email, rememberMe);
+  return { accessToken, refreshToken, rememberMe };
 }
 
 export async function getCurrentUser(userId: string): Promise<SafeUser> {

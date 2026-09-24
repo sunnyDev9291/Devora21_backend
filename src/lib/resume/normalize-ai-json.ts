@@ -23,12 +23,15 @@ export function coerceTextField(value: unknown): string {
     return entries
       .map(([key, val]) => {
         const text = coerceTextField(val);
-        if (!text) return "";
         // Skip numeric keys from weird arrays-as-objects
         if (/^\d+$/.test(key)) return text;
-        return `${key}: ${text}`;
+        // Keep category keys even when empty (e.g. required "Other:" last).
+        return `${key}: ${text}`.trimEnd();
       })
-      .filter(Boolean)
+      .filter((line) => {
+        // Drop fully empty numeric-key debris; keep "Label:" / "Label: items"
+        return Boolean(line) && !/^\d+$/.test(line);
+      })
       .join("\n");
   }
   return "";

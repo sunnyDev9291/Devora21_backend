@@ -5,16 +5,11 @@ import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
 import { parseResumeTemplate } from "../lib/resume/parse-template";
 import { buildResumeSystemPrompt, buildResumeUserPrompt } from "../lib/resume/prompt";
 import { createChatCompletion, CLAUDE_MAX_OUTPUT_TOKENS } from "./claude.service";
-import { getUserPrompt, getUserResumeTemplate } from "./onboarding.service";
+import { getUserResumeTemplate } from "./onboarding.service";
 import { archiveResume } from "./resume-archive.service";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
 import { scrapeJobFromUrl } from "./zyte.service";
-import {
-  assertWorksWithEnglishTeam,
-  ENGLISH_TEAM_BLOCKED_MESSAGE,
-  ENGLISH_TEAM_REQUIRED_CODE,
-  isEnglishTeamBlockedError,
-} from "./english-team-check.service";
+import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
 
 export type ResumeFromJobStatus =
@@ -70,10 +65,6 @@ export type ResumeFromJobStatusResponse = {
   companyName?: string;
   warning?: string;
   error?: string;
-  /** Present when resume was blocked by English-team gate. */
-  code?: typeof ENGLISH_TEAM_REQUIRED_CODE;
-  answer?: "No";
-  workWithEnglishTeam?: false;
   result?: ResumeFromJobResult;
   createdAt: string;
   updatedAt: string;
@@ -182,7 +173,12 @@ async function runResumeFromJobPipeline(
   jobId: string,
   userId: string,
   url: string,
-  skipEnglishTeamGate = false
+  _skipEnglishTeamGate = false,
+  promptOverrides?: {
+    customPrompt?: string;
+    profilePrompt?: string;
+    promptContent?: string;
+  }
 ): Promise<void> {
   try {
     await setJobStatus(jobId, "scraping", {
@@ -212,19 +208,8 @@ async function runResumeFromJobPipeline(
       jobTitle,
       companyName,
       message: scraped.warning
-        ? `Scraped ${companyName} — ${jobTitle} (with warnings); ${
-            skipEnglishTeamGate ? "skipping English-team gate…" : "checking English team…"
-          }`
-        : `Scraped ${companyName} — ${jobTitle}; ${
-            skipEnglishTeamGate ? "skipping English-team gate…" : "checking English team…"
-          }`,
-    });
-
-    // Gate unless user explicitly confirmed Continue creating.
-    await assertWorksWithEnglishTeam(jobTitle, jobDescription, {
-      skip: skipEnglishTeamGate,
-      userId,
-      context: `resume/from-job url=${url}`,
+        ? `Scraped ${companyName} — ${jobTitle} (with warnings); loading profile…`
+        : `Scraped ${companyName} — ${jobTitle}; loading profile…`,
     });
 
     let templateBase64: string;
@@ -238,26 +223,15 @@ async function runResumeFromJobPipeline(
       throw err;
     }
 
-    // Only the saved profile prompt is used — request/body prompts are ignored.
-    let customPrompt = "";
-    try {
-      const prompt = await getUserPrompt(userId);
-      customPrompt = prompt.content?.trim() || "";
-    } catch (err) {
-      if (err instanceof AppError && err.statusCode === 404) {
-        throw new AppError(
-          422,
-          "Profile prompt not found. Upload a prompt in your Devora21 profile before generating a resume."
-        );
-      }
-      throw err;
-    }
-    if (!customPrompt) {
-      throw new AppError(
-        422,
-        "Profile prompt not found. Upload a prompt in your Devora21 profile before generating a resume."
-      );
-    }
+    // Prefer request-body prompt; else live profile store (cache invalidated on upload).
+    const resolved = await resolveWritingPrompt({
+      userId,
+      customPrompt: promptOverrides?.customPrompt,
+      profilePrompt: promptOverrides?.profilePrompt,
+      promptContent: promptOverrides?.promptContent,
+      context: "resume/from-job",
+    });
+    const customPrompt = resolved.content;
 
     const templateBuffer = Buffer.from(templateBase64, "base64");
     const parsedTemplate = parseResumeTemplate(templateBuffer);
@@ -270,7 +244,7 @@ async function runResumeFromJobPipeline(
       message: `Calling Claude (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
     });
 
-    // Only the profile prompt instructs the model. Job + template are data only.
+    // Only the resolved profile/request prompt instructs the model. Job + template are data only.
     const system = buildResumeSystemPrompt(parsedTemplate.layout, customPrompt);
     const user = buildResumeUserPrompt({
       jobTitle,
@@ -390,7 +364,12 @@ export async function enqueueResumeFromJob(
     job.id,
     userId,
     job.url,
-    input.skipEnglishTeamGate === true
+    input.skipEnglishTeamGate === true,
+    {
+      customPrompt: input.customPrompt,
+      profilePrompt: input.profilePrompt,
+      promptContent: input.promptContent,
+    }
   );
 
 
@@ -440,19 +419,10 @@ export async function getResumeFromJobStatus(
   };
 
   if (status === "error") {
-    const englishBlocked = isEnglishTeamBlockedError(job.error);
     return {
       ...base,
       step: Math.max(1, stepIndexForStatus("scraping")),
       progressPercent: 0,
-      ...(englishBlocked
-        ? {
-            code: ENGLISH_TEAM_REQUIRED_CODE,
-            answer: "No" as const,
-            workWithEnglishTeam: false as const,
-            error: job.error || ENGLISH_TEAM_BLOCKED_MESSAGE,
-          }
-        : {}),
     };
   }
 

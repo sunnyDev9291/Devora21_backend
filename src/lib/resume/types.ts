@@ -37,6 +37,8 @@ export type TemplateJobSkeleton = {
   companyParaIndex: number;
   roleParaIndex: number;
   datesParaIndex: number;
+  /** Joao-style workplace line under the job header (e.g. "City | Remote"). Not a bullet. */
+  locationParaIndex?: number;
   bulletParaIndices: number[];
   projectBlocks: Array<{
     name: string;

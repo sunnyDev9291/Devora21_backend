@@ -11,10 +11,10 @@ const envSchema = z.object({
 
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
-  /** Short-lived access cookie/JWT (default 15m). */
-  JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
-  /** Refresh window when rememberMe is false (default 1d). */
-  JWT_REFRESH_EXPIRES_IN: z.string().default("1d"),
+  /** Access cookie/JWT lifetime (default 12h). Refreshed via refresh_token. */
+  JWT_ACCESS_EXPIRES_IN: z.string().default("12h"),
+  /** Refresh window when rememberMe is false (default 7d). */
+  JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
   /** Refresh window when rememberMe is true (default 30d). */
   JWT_REFRESH_REMEMBER_EXPIRES_IN: z.string().default("30d"),
 

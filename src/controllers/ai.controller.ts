@@ -8,7 +8,7 @@ import * as apiKeyService from "../services/api-key.service";
 import { prisma } from "../lib/prisma";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import type { ChatCompletionsInput, ClaudeChatInput } from "../validators/ai.validator";
-import { assertWorksWithEnglishTeam } from "../services/english-team-check.service";
+import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
 
 function serviceUnavailable(res: Response): void {
   res.status(503).json({ error: "Claude API is not configured" });
@@ -178,8 +178,8 @@ async function resolveAiUser(
 }
 
 /**
- * Resume mode only: profile prompt is the writing system instruction.
- * Any client/BFF system messages are stripped and ignored in resume mode.
+ * Resume mode: writing instructions from request body (preferred) or live profile store.
+ * Client/BFF system messages are stripped in resume mode.
  */
 async function applyUserProfilePrompt(
   req: AuthenticatedRequest,
@@ -188,13 +188,14 @@ async function applyUserProfilePrompt(
   const nonSystemMessages = body.messages.filter((m) => m.role !== "system");
   const user = await resolveAiUser(req, body);
 
-  const prompt = user.customPrompt?.trim();
-  if (!prompt) {
-    throw new AppError(
-      422,
-      "Profile prompt not found. Upload a prompt in your Devora21 profile before generating a resume."
-    );
-  }
+  const resolved = await resolveWritingPrompt({
+    userId: user.id,
+    customPrompt: body.customPrompt,
+    profilePrompt: body.profilePrompt,
+    promptContent: body.promptContent,
+    context: "ai/chat/completions",
+  });
+  const prompt = resolved.content;
 
   // Infer layout hint from user messages if present; default bullets.
   const userBlob = nonSystemMessages.map((m) => m.content).join("\n").toLowerCase();
@@ -211,9 +212,16 @@ async function applyUserProfilePrompt(
     resumeJsonOutputContract(layout),
   ].join("\n");
 
-  const { userId: _userId, jobTitle: _jobTitle, jobDescription: _jobDescription, skipEnglishTeamGate: _skip, ...rest } =
-    body;
-
+  const {
+    userId: _userId,
+    jobTitle: _jobTitle,
+    jobDescription: _jobDescription,
+    skipEnglishTeamGate: _skip,
+    customPrompt: _customPrompt,
+    profilePrompt: _profilePrompt,
+    promptContent: _promptContent,
+    ...rest
+  } = body;
 
   // Claude has no true unlimited mode — use the sync API hard cap (64k).
   return {
@@ -251,17 +259,6 @@ export async function chatCompletionsHandler(
           "jobTitle or jobDescription is required for resume generation"
         );
       }
-
-      // Resume mode keeps the existing English-team gate unless explicitly skipped.
-      await assertWorksWithEnglishTeam(
-        jobContext.jobTitle,
-        jobContext.jobDescription,
-        {
-          skip: body.skipEnglishTeamGate === true,
-          userId: req.authUser?.id ?? body.userId,
-          context: "ai/chat/completions",
-        }
-      );
 
       input = await applyUserProfilePrompt(req, {
         ...body,

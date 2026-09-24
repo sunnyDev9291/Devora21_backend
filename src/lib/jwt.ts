@@ -69,19 +69,19 @@ export function getRefreshTokenExpiry(rememberMe = false): Date {
     Date.now() +
       parseDurationMs(
         getRefreshExpiresIn(rememberMe),
-        rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
+        rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
       )
   );
 }
 
 export function getAccessTokenMaxAgeMs(): number {
-  return parseDurationMs(getAccessTokenExpiresIn(), 15 * 60 * 1000);
+  return parseDurationMs(getAccessTokenExpiresIn(), 12 * 60 * 60 * 1000);
 }
 
 export function getRefreshTokenMaxAgeMs(rememberMe = false): number {
   return parseDurationMs(
     getRefreshExpiresIn(rememberMe),
-    rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000
+    rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
   );
 }
 

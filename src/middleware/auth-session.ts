@@ -111,6 +111,8 @@ export async function resolveAuth(
 
   try {
     const tokens = await authService.refreshTokens(refreshToken);
+    // Only rewrite cookies when access was missing/expired (this path).
+    // Refresh token string is unchanged — safe under parallel requests.
     setAuthCookies(res, tokens.accessToken, tokens.refreshToken, tokens.rememberMe);
     const user = await findUserByAccessToken(tokens.accessToken);
     if (!user) {

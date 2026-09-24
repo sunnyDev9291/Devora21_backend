@@ -16,6 +16,11 @@ import {
   parseListingUrlsPatch,
   type ListingUrls,
 } from "../lib/listing-urls";
+import {
+  getCachedPrompt,
+  invalidatePromptCache,
+  setCachedPrompt,
+} from "../lib/resume/prompt-cache";
 
 function listingUrlsDbValue(
   listingUrls: ListingUrls
@@ -205,6 +210,10 @@ export async function completeOnboarding(
     },
   });
 
+  if (fileUpdates.customPrompt !== undefined) {
+    invalidatePromptCache(userId);
+  }
+
   return toSafeUser(user);
 }
 
@@ -266,13 +275,27 @@ export async function updateUserProfile(
     },
   });
 
+  if (fileUpdates.customPrompt !== undefined) {
+    invalidatePromptCache(userId);
+  }
+
   return toSafeUser(user);
 }
 
 export async function getUserPrompt(userId: string): Promise<{
   content: string;
   fileName: string;
+  source: "profile_store" | "cache";
 }> {
+  const cached = getCachedPrompt(userId);
+  if (cached?.content?.trim()) {
+    return {
+      content: cached.content,
+      fileName: cached.fileName,
+      source: "cache",
+    };
+  }
+
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     throw new AppError(404, "Prompt not found");
@@ -280,9 +303,12 @@ export async function getUserPrompt(userId: string): Promise<{
 
   const storedPrompt = user.customPrompt?.trim();
   if (storedPrompt) {
+    const fileName = user.promptFileName ?? "prompt.txt";
+    setCachedPrompt(userId, storedPrompt, fileName);
     return {
       content: storedPrompt,
-      fileName: user.promptFileName ?? "prompt.txt",
+      fileName,
+      source: "profile_store",
     };
   }
 
@@ -302,7 +328,8 @@ export async function getUserPrompt(userId: string): Promise<{
         data: { customPrompt: content },
       });
 
-      return { content, fileName };
+      setCachedPrompt(userId, content, fileName);
+      return { content, fileName, source: "profile_store" };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
@@ -311,7 +338,6 @@ export async function getUserPrompt(userId: string): Promise<{
   }
 
   throw new AppError(404, "Prompt not found");
-
 }
 
 export async function getUserResumeTemplate(userId: string): Promise<{

@@ -3,7 +3,9 @@ import {
   checkEnglishTeamHandler,
   checkJobStreamHandler,
   crawlBuiltInHandler,
+  crawlGetOnBoardHandler,
   crawlHiringCafeHandler,
+  crawlHimalayasHandler,
   crawlWorkableHandler,
   crawlWorkingNomadsHandler,
   discoverBuiltInHandler,
@@ -19,7 +21,9 @@ import { validateBody } from "../middleware/validate";
 import {
   checkEnglishTeamSchema,
   crawlBuiltInSchema,
+  crawlGetOnBoardSchema,
   crawlHiringCafeSchema,
+  crawlHimalayasSchema,
   crawlWorkableSchema,
   crawlWorkingNomadsSchema,
   discoverBuiltInSchema,
@@ -65,6 +69,24 @@ router.post(
   jobScrapeRateLimiter,
   validateBody(crawlWorkingNomadsSchema),
   crawlWorkingNomadsHandler
+);
+
+router.post(
+  "/crawl/himalayas",
+  requireAuth,
+  requireResumeBuilder,
+  jobScrapeRateLimiter,
+  validateBody(crawlHimalayasSchema),
+  crawlHimalayasHandler
+);
+
+router.post(
+  "/crawl/getonboard",
+  requireAuth,
+  requireResumeBuilder,
+  jobScrapeRateLimiter,
+  validateBody(crawlGetOnBoardSchema),
+  crawlGetOnBoardHandler
 );
 
 router.post(

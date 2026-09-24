@@ -1,11 +1,15 @@
 import { prisma } from "./prisma";
 import { AppError } from "../middleware/errorHandler";
+import { isValidGetOnBoardCountry, resolveGetOnBoardCountryCode } from "./job-discovery/getonboard";
+import { isValidHimalayasCountry } from "./job-discovery/himalayas";
 
 export const LISTING_URL_PLATFORMS = [
   "builtin",
   "hiringcafe",
   "workable",
   "workingnomads",
+  "himalayas",
+  "getonboard",
 ] as const;
 
 export type ListingUrlPlatform = (typeof LISTING_URL_PLATFORMS)[number];
@@ -17,6 +21,8 @@ const FLAT_FIELD_BY_PLATFORM: Record<ListingUrlPlatform, string> = {
   hiringcafe: "listingUrl_hiringcafe",
   workable: "listingUrl_workable",
   workingnomads: "listingUrl_workingnomads",
+  himalayas: "listingUrl_himalayas",
+  getonboard: "listingUrl_getonboard",
 };
 
 function fieldError(field: string, message: string): AppError {
@@ -31,6 +37,17 @@ export function isValidListingUrlForPlatform(
   platform: ListingUrlPlatform,
   value: string
 ): boolean {
+  // Himalayas / Get on Board store a country name, not a listing URL.
+  if (platform === "himalayas") {
+    return isValidHimalayasCountry(value);
+  }
+  if (platform === "getonboard") {
+    return (
+      isValidGetOnBoardCountry(value) &&
+      resolveGetOnBoardCountryCode(value) !== null
+    );
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -182,6 +199,18 @@ export function parseListingUrlsPatch(
     if (!isValidListingUrlForPlatform(platform, url)) {
       const field =
         jsonRaw !== undefined ? `listingUrls.${platform}` : FLAT_FIELD_BY_PLATFORM[platform];
+      if (platform === "himalayas") {
+        throw fieldError(
+          field,
+          "Invalid himalayas country (store a country name like \"Argentina\", not a URL)"
+        );
+      }
+      if (platform === "getonboard") {
+        throw fieldError(
+          field,
+          "Invalid getonboard country (store a country name like \"Argentina\", not a URL)"
+        );
+      }
       throw fieldError(
         field,
         `Invalid ${platform} listing URL (must be an https listing page)`

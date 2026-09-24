@@ -66,7 +66,8 @@ export function isValidResumeContent(content: GeneratedResumeContent): boolean {
 }
 
 /**
- * Lock company, dates, project names, and bullet/project COUNTS from template skeleton.
+ * Lock company, dates, and project names from template skeleton.
+ * Bullet COUNT and content come from AI / writing instructions — never pad or clip to template slots.
  */
 export function mergeWithTemplateSkeleton(
   ai: GeneratedResumeContent,
@@ -96,13 +97,9 @@ export function mergeWithTemplateSkeleton(
       };
     }
 
-    const bullets = [...(src?.bullets ?? [])];
-    while (bullets.length < job.bulletCount) {
-      bullets.push("");
-    }
-    if (bullets.length > job.bulletCount) {
-      bullets.length = job.bulletCount;
-    }
+    const bullets = [...(src?.bullets ?? [])]
+      .map((b) => b.trim())
+      .filter(Boolean);
 
     return {
       company: job.company || src?.company || "",
@@ -142,7 +139,9 @@ export function applyContentPostProcess(
   const skillTerms = collectSkillTermsFromSkillsBlock(next.skills);
   next.summary = boldSkillTermsWholeToken(next.summary, skillTerms);
   next.title = boldSkillTermsWholeToken(next.title, skillTerms);
-  next.skills = boldSkillTermsWholeToken(next.skills, skillTerms);
+  // Do NOT markdown-bold the skills block — Franco values are regular weight;
+  // only the category label is bolded in DOCX XML.
+  next.skills = next.skills.replace(/\*\*/g, "");
   next.experiences = next.experiences.map((exp) => ({
     ...exp,
     role: boldSkillTermsWholeToken(exp.role, skillTerms),

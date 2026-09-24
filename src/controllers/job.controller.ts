@@ -24,6 +24,14 @@ import {
   crawlWorkableJobsFromUrl,
   discoverWorkableJobsFromUrl,
 } from "../services/workable-discovery.service";
+import {
+  crawlHimalayasJobsByCountry,
+  resolveHimalayasCountryForUser,
+} from "../services/himalayas-discovery.service";
+import {
+  crawlGetOnBoardJobsByCountry,
+  resolveGetOnBoardCountryForUser,
+} from "../services/getonboard-discovery.service";
 import { scrapeJobFromUrl } from "../services/zyte.service";
 import {
   resolveListingUrlForUser,
@@ -31,7 +39,9 @@ import {
 } from "../lib/listing-urls";
 import type {
   CrawlBuiltInInput,
+  CrawlGetOnBoardInput,
   CrawlHiringCafeInput,
+  CrawlHimalayasInput,
   CrawlWorkableInput,
   CrawlWorkingNomadsInput,
   DiscoverBuiltInInput,
@@ -346,6 +356,58 @@ export async function crawlWorkingNomadsHandler(
       (req.body as CrawlWorkingNomadsInput).url
     );
     const result = await crawlWorkingNomadsJobsFromUrl(listingUrl);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Himalayas crawl — country name only (body or profile listingUrls.himalayas).
+ * Returns remote jobs for that country posted in the last 24 hours.
+ */
+export async function crawlHimalayasHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser?.id) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const body = req.body as CrawlHimalayasInput;
+    const country = await resolveHimalayasCountryForUser(req.authUser.id, {
+      country: body.country,
+      countryName: body.countryName,
+    });
+    const result = await crawlHimalayasJobsByCountry(country);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Get on Board crawl — country name only (body or profile listingUrls.getonboard).
+ * Uses official public Search API; returns remote jobs posted in the last 24 hours.
+ */
+export async function crawlGetOnBoardHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser?.id) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const body = req.body as CrawlGetOnBoardInput;
+    const country = await resolveGetOnBoardCountryForUser(req.authUser.id, {
+      country: body.country,
+      countryName: body.countryName,
+    });
+    const result = await crawlGetOnBoardJobsByCountry(country);
     res.status(200).json(result);
   } catch (err) {
     next(err);

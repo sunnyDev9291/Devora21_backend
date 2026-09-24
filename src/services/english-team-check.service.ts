@@ -8,11 +8,6 @@ import {
 import { AppError } from "../middleware/errorHandler";
 import { createChatCompletion } from "./claude.service";
 
-export const ENGLISH_TEAM_REQUIRED_CODE = "ENGLISH_TEAM_REQUIRED";
-
-export const ENGLISH_TEAM_BLOCKED_MESSAGE =
-  "This job explicitly requires Spanish or Portuguese. Resume generation was blocked.";
-
 const ENGLISH_TEAM_MAX_TOKENS = 16;
 
 export type EnglishTeamCheckResult = {
@@ -20,7 +15,10 @@ export type EnglishTeamCheckResult = {
   workWithEnglishTeam: boolean;
 };
 
-/** Run Claude Yes/No English-team analysis for a job posting. */
+/**
+ * Optional informational Yes/No analysis for POST /jobs/check/english-team.
+ * Not used as a hard gate on resume creation.
+ */
 export async function evaluateEnglishTeam(
   jobTitle: string,
   jobDescription: string
@@ -56,39 +54,4 @@ export async function evaluateEnglishTeam(
     answer,
     workWithEnglishTeam: answer === "Yes",
   };
-}
-
-/**
- * Gate resume generation: Yes continues; No throws ENGLISH_TEAM_REQUIRED (422).
- * When skip is true (user confirmed Continue creating), bypass without calling Claude.
- */
-export async function assertWorksWithEnglishTeam(
-  jobTitle: string,
-  jobDescription: string,
-  options?: {
-    skip?: boolean;
-    userId?: string;
-    context?: string;
-  }
-): Promise<EnglishTeamCheckResult | null> {
-  if (options?.skip) {
-    console.log(
-      `[english-team] skip gate user=${options.userId ?? "unknown"} context=${options.context ?? "resume"} title=${JSON.stringify(jobTitle.trim().slice(0, 120))} at=${new Date().toISOString()}`
-    );
-    return null;
-  }
-
-  const result = await evaluateEnglishTeam(jobTitle, jobDescription);
-  if (!result.workWithEnglishTeam) {
-    throw new AppError(422, ENGLISH_TEAM_BLOCKED_MESSAGE, undefined, ENGLISH_TEAM_REQUIRED_CODE, {
-      answer: "No",
-      workWithEnglishTeam: false,
-      message: ENGLISH_TEAM_BLOCKED_MESSAGE,
-    });
-  }
-  return result;
-}
-
-export function isEnglishTeamBlockedError(message: string | null | undefined): boolean {
-  return message === ENGLISH_TEAM_BLOCKED_MESSAGE;
 }
