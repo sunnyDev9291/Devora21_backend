@@ -2,6 +2,7 @@ import { prisma } from "./prisma";
 import { AppError } from "../middleware/errorHandler";
 import { isValidGetOnBoardCountry, resolveGetOnBoardCountryCode } from "./job-discovery/getonboard";
 import { isValidHimalayasCountry } from "./job-discovery/himalayas";
+import { isValidJobicyCountry } from "./job-discovery/jobicy";
 
 export const LISTING_URL_PLATFORMS = [
   "builtin",
@@ -10,6 +11,7 @@ export const LISTING_URL_PLATFORMS = [
   "workingnomads",
   "himalayas",
   "getonboard",
+  "jobicy",
 ] as const;
 
 export type ListingUrlPlatform = (typeof LISTING_URL_PLATFORMS)[number];
@@ -23,6 +25,7 @@ const FLAT_FIELD_BY_PLATFORM: Record<ListingUrlPlatform, string> = {
   workingnomads: "listingUrl_workingnomads",
   himalayas: "listingUrl_himalayas",
   getonboard: "listingUrl_getonboard",
+  jobicy: "listingUrl_jobicy",
 };
 
 function fieldError(field: string, message: string): AppError {
@@ -37,7 +40,7 @@ export function isValidListingUrlForPlatform(
   platform: ListingUrlPlatform,
   value: string
 ): boolean {
-  // Himalayas / Get on Board store a country name, not a listing URL.
+  // Himalayas / Get on Board / Jobicy store a country name, not a listing URL.
   if (platform === "himalayas") {
     return isValidHimalayasCountry(value);
   }
@@ -46,6 +49,9 @@ export function isValidListingUrlForPlatform(
       isValidGetOnBoardCountry(value) &&
       resolveGetOnBoardCountryCode(value) !== null
     );
+  }
+  if (platform === "jobicy") {
+    return isValidJobicyCountry(value);
   }
 
   let parsed: URL;
@@ -209,6 +215,12 @@ export function parseListingUrlsPatch(
         throw fieldError(
           field,
           "Invalid getonboard country (store a country name like \"Argentina\", not a URL)"
+        );
+      }
+      if (platform === "jobicy") {
+        throw fieldError(
+          field,
+          "Invalid jobicy country (store a country name like \"Argentina\", not a URL)"
         );
       }
       throw fieldError(

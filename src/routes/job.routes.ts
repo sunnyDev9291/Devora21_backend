@@ -6,6 +6,7 @@ import {
   crawlGetOnBoardHandler,
   crawlHiringCafeHandler,
   crawlHimalayasHandler,
+  crawlJobicyHandler,
   crawlWorkableHandler,
   crawlWorkingNomadsHandler,
   discoverBuiltInHandler,
@@ -24,6 +25,7 @@ import {
   crawlGetOnBoardSchema,
   crawlHiringCafeSchema,
   crawlHimalayasSchema,
+  crawlJobicySchema,
   crawlWorkableSchema,
   crawlWorkingNomadsSchema,
   discoverBuiltInSchema,
@@ -87,6 +89,15 @@ router.post(
   jobScrapeRateLimiter,
   validateBody(crawlGetOnBoardSchema),
   crawlGetOnBoardHandler
+);
+
+router.post(
+  "/crawl/jobicy",
+  requireAuth,
+  requireResumeBuilder,
+  jobScrapeRateLimiter,
+  validateBody(crawlJobicySchema),
+  crawlJobicyHandler
 );
 
 router.post(

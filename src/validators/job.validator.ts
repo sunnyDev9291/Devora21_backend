@@ -325,6 +325,36 @@ export type GetOnBoardJobCrawlResult = {
   jobs: GetOnBoardJobDiscoveryItem[];
 };
 
+/** POST /jobs/crawl/jobicy — country name only (not a listing URL). */
+export const crawlJobicySchema = z
+  .object({
+    country: optionalCountryName,
+    countryName: optionalCountryName,
+  })
+  .transform((value) => ({
+    country: value.country ?? value.countryName,
+    countryName: value.countryName ?? value.country,
+  }));
+
+export type CrawlJobicyInput = z.infer<typeof crawlJobicySchema>;
+
+export type JobicyJobDiscoveryItem = {
+  jobId: string;
+  companyName: string;
+  jobTitle: string;
+  jobUrl: string;
+};
+
+export type JobicyJobCrawlResult = {
+  sourceUrl: string;
+  platform: "jobicy";
+  country: string;
+  geoSlug: string | null;
+  pagesScraped: number;
+  totalCount: number;
+  jobs: JobicyJobDiscoveryItem[];
+};
+
 /** POST /jobs/check/english-team — Yes/No English-team analysis. */
 export const checkEnglishTeamSchema = z
   .object({

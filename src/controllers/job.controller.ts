@@ -32,6 +32,10 @@ import {
   crawlGetOnBoardJobsByCountry,
   resolveGetOnBoardCountryForUser,
 } from "../services/getonboard-discovery.service";
+import {
+  crawlJobicyJobsByCountry,
+  resolveJobicyCountryForUser,
+} from "../services/jobicy-discovery.service";
 import { scrapeJobFromUrl } from "../services/zyte.service";
 import {
   resolveListingUrlForUser,
@@ -42,6 +46,7 @@ import type {
   CrawlGetOnBoardInput,
   CrawlHiringCafeInput,
   CrawlHimalayasInput,
+  CrawlJobicyInput,
   CrawlWorkableInput,
   CrawlWorkingNomadsInput,
   DiscoverBuiltInInput,
@@ -408,6 +413,32 @@ export async function crawlGetOnBoardHandler(
       countryName: body.countryName,
     });
     const result = await crawlGetOnBoardJobsByCountry(country);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Jobicy crawl — country name only (body or profile listingUrls.jobicy).
+ * Free public API; remote jobs posted in the last 24 hours.
+ */
+export async function crawlJobicyHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser?.id) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const body = req.body as CrawlJobicyInput;
+    const country = await resolveJobicyCountryForUser(req.authUser.id, {
+      country: body.country,
+      countryName: body.countryName,
+    });
+    const result = await crawlJobicyJobsByCountry(country);
     res.status(200).json(result);
   } catch (err) {
     next(err);
