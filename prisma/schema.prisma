@@ -42,6 +42,8 @@ model User {
   resumeArchives         ResumeArchive[]
   apiKeys                ApiKey[]
   resumeGenerationJobs   ResumeGenerationJob[]
+  remoteDevices          RemoteDevice[]
+  resumeRemoteDeliveries ResumeRemoteDelivery[]
 
   @@unique([provider, providerId])
   @@index([email])
@@ -82,12 +84,61 @@ model ResumeArchive {
   pdfUrl         String?  @db.Text
   createdAt      DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries ResumeRemoteDelivery[]
 
   @@index([userId, bidAt(sort: Desc)])
   @@index([userId, companyName])
   @@index([userId, jobTitle])
   @@map("resume_archives")
+}
+
+/** A remote PC that can pull queued resume downloads (Windows agent). */
+model RemoteDevice {
+  id           String    @id @default(uuid())
+  userId       String
+  name         String
+  secretPrefix String
+  secretHash   String    @unique
+  isDefault    Boolean   @default(false)
+  lastSeenAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries ResumeRemoteDelivery[]
+
+  @@index([userId])
+  @@map("remote_devices")
+}
+
+/**
+ * Queued file delivery to a remote device.
+ * status: pending | claimed | delivered | failed | expired
+ */
+model ResumeRemoteDelivery {
+  id          String    @id @default(uuid())
+  userId      String
+  deviceId    String
+  archiveId   String
+  status      String    @default("pending")
+  includePdf  Boolean   @default(true)
+  includeDocx Boolean   @default(true)
+  error       String?
+  claimedAt   DateTime?
+  deliveredAt DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device  RemoteDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  archive ResumeArchive @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, status, createdAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([archiveId])
+  @@map("resume_remote_deliveries")
 }
 
 model ResumeGenerationJob {

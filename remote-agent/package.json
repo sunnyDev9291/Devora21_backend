@@ -1,0 +1,15 @@
+{
+  "name": "devora21-remote-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Polls Devora21 remote-queue and saves resume PDF/DOCX on this PC",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "once": "node src/index.js --once"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

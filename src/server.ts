@@ -16,14 +16,17 @@ import { ALLOWED_FRONTEND_ORIGINS } from "./config/frontend";
 import { verifyEmailTransport } from "./services/email.service";
 import { prisma } from "./lib/prisma";
 
+import { logger } from "./lib/logger";
+
 dns.setDefaultResultOrder("ipv4first");
 
 const server = app.listen(env.PORT, "0.0.0.0", async () => {
-  console.log(`Server running on http://0.0.0.0:${env.PORT}`);
-  console.log(`Environment: ${env.NODE_ENV}`);
-  console.log(`Frontend URL: ${env.FRONTEND_URL}`);
-  console.log(`Allowed frontend origins: ${ALLOWED_FRONTEND_ORIGINS.join(", ")}`);
-  console.log(`API base URL: ${env.API_BASE_URL}`);
+  logger.info("server", `Server running on http://0.0.0.0:${env.PORT}`);
+  logger.info("server", `Environment: ${env.NODE_ENV}`);
+  logger.info("server", `Frontend URL: ${env.FRONTEND_URL}`);
+  logger.info("server", `Allowed frontend origins: ${ALLOWED_FRONTEND_ORIGINS.join(", ")}`);
+  logger.info("server", `API base URL: ${env.API_BASE_URL}`);
+  logger.info("server", `Live logs: ${env.API_BASE_URL}/logs/viewer (login required)`);
   console.log(`Google OAuth: ${googleOAuthEnabled ? "enabled" : "not configured"}`);
   if (!googleOAuthEnabled) {
     console.log(`  Google callback: ${env.API_BASE_URL}/auth/google/callback`);
@@ -64,7 +67,7 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
 });
 
 async function shutdown(): Promise<void> {
-  console.log("Shutting down...");
+  logger.info("server", "Shutting down...");
   server.close();
   await prisma.$disconnect();
   process.exit(0);
