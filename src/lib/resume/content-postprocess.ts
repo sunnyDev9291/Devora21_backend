@@ -22,6 +22,12 @@ function asStringArray(v: unknown): string[] {
   return v.map((x) => asString(x)).filter(Boolean);
 }
 
+/** Keep empty strings so bullet indices stay aligned with template slots. */
+function asBulletArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => asString(x));
+}
+
 function normalizeProject(raw: unknown): ResumeProject | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
@@ -43,7 +49,7 @@ function normalizeExperience(raw: unknown, layout: ResumeTemplateLayout): Resume
   const company = asString(o.company);
   const role = asString(o.role) || asString(o.title);
   const dates = asString(o.dates) || asString(o.date);
-  const bullets = asStringArray(o.bullets);
+  const bullets = asBulletArray(o.bullets);
   const projectsRaw = Array.isArray(o.projects) ? o.projects : [];
   const projects = projectsRaw
     .map(normalizeProject)
@@ -66,8 +72,27 @@ export function isValidResumeContent(content: GeneratedResumeContent): boolean {
 }
 
 /**
- * Lock company, dates, and project names from template skeleton.
- * Bullet COUNT and content come from AI / writing instructions — never pad or clip to template slots.
+ * Prefer AI bullets; if the model under/over-shoots, pad from template samples
+ * and clip so length === template bulletCount. DOCX slot count always wins.
+ */
+export function fitBulletsToTemplateJob(
+  aiBullets: string[] | undefined,
+  job: TemplateJobSkeleton
+): string[] {
+  const need = job.bulletCount;
+  const samples = job.bulletSamples ?? [];
+  const fromAi = [...(aiBullets ?? [])].map((b) => String(b ?? "").trim());
+  const fitted: string[] = [];
+  for (let i = 0; i < need; i += 1) {
+    fitted.push(fromAi[i] || samples[i] || "");
+  }
+  return fitted;
+}
+
+/**
+ * Mode 1: company/role/dates frozen from template. AI supplies bullets only
+ * (and project field text for projects layout).
+ * Bullet counts: AI preferred; template pad/clip if the model errs.
  */
 export function mergeWithTemplateSkeleton(
   ai: GeneratedResumeContent,
@@ -89,31 +114,48 @@ export function mergeWithTemplateSkeleton(
         };
       });
       return {
-        company: job.company || src?.company || "",
-        role: src?.role || job.role || "",
-        dates: job.dates || src?.dates || "",
+        company: job.company,
+        role: job.role,
+        dates: job.dates,
         bullets: [],
         projects,
       };
     }
 
-    const bullets = [...(src?.bullets ?? [])]
-      .map((b) => b.trim())
-      .filter(Boolean);
+    const fromAi = [...(src?.bullets ?? [])].map((b) => b.trim());
+    if (fromAi.length !== job.bulletCount) {
+      console.warn(
+        `[resume] exp[${i}] "${job.company}": AI wrote ${fromAi.length} bullet(s); template needs ${job.bulletCount} — pad/clip from template`
+      );
+    }
 
     return {
-      company: job.company || src?.company || "",
-      role: src?.role || job.role || "",
-      dates: job.dates || src?.dates || "",
-      bullets,
+      company: job.company,
+      role: job.role,
+      dates: job.dates,
+      bullets: fitBulletsToTemplateJob(src?.bullets, job),
     };
   });
 
-  return {
-    ...ai,
-    layout,
-    experiences,
-  };
+  return { ...ai, layout, experiences };
+}
+
+/** Pad/clip skills lines to template sample category count (Mode 1). */
+export function fitSkillsToTemplateSlotCount(
+  skills: string,
+  skillsSample: string
+): string {
+  const sampleLines = skillsSample
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const slotCount = Math.max(sampleLines.length, 1);
+  const lines = skills
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  while (lines.length < slotCount) lines.push("");
+  return lines.slice(0, slotCount).join("\n");
 }
 
 export function applyContentPostProcess(
@@ -135,6 +177,7 @@ export function applyContentPostProcess(
   };
 
   next.skills = formatSkillsToTemplateStyle(next.skills, opts.skillsSample, opts.layout);
+  next.skills = fitSkillsToTemplateSlotCount(next.skills, opts.skillsSample);
 
   const skillTerms = collectSkillTermsFromSkillsBlock(next.skills);
   next.summary = boldSkillTermsWholeToken(next.summary, skillTerms);

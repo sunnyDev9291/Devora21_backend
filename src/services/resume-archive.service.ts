@@ -52,6 +52,10 @@ export interface ArchiveResumeInput {
   datetime: string;
   resumeFileName: string;
   fileBuffer: Buffer;
+  /** When set, overwrite this archive's stored DOCX/PDF (re-apply / re-render). */
+  archiveId?: string;
+  /** Template used to produce this archive. */
+  templateId?: string | null;
 }
 
 export interface ArchiveResumeResult {
@@ -156,7 +160,6 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
   const resumeName = sanitizeArchiveFileName(input.resumeFileName);
   const pdfFileName = toPdfDisplayName(resumeName);
   const bidAt = parseBidAt(input.datetime);
-  const archiveId = uuidv4();
   const companyName = normalizeCompanyQuery(input.companyName);
   if (!companyName) {
     throw new AppError(400, "companyName is required");
@@ -164,6 +167,19 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
   const jobTitle = normalizeJobTitleQuery(input.jobTitle);
   if (!jobTitle) {
     throw new AppError(400, "jobTitle is required");
+  }
+
+  let archiveId = input.archiveId?.trim() || "";
+  if (archiveId) {
+    const existing = await prisma.resumeArchive.findFirst({
+      where: { id: archiveId, userId: input.userId },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new AppError(404, "Resume archive not found");
+    }
+  } else {
+    archiveId = uuidv4();
   }
 
   let pdfBuffer: Buffer;
@@ -189,10 +205,12 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
   ]);
 
   try {
-    await prisma.resumeArchive.create({
-      data: {
+    await prisma.resumeArchive.upsert({
+      where: { id: archiveId },
+      create: {
         id: archiveId,
         userId: input.userId,
+        templateId: input.templateId ?? null,
         bidAt,
         jobTitle,
         companyName,
@@ -204,9 +222,20 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
         docxUrl: docxUpload.docxUrl,
         pdfUrl: pdfUpload.pdfUrl,
       },
+      update: {
+        templateId: input.templateId ?? undefined,
+        bidAt,
+        jobTitle,
+        companyName,
+        jobDescription: input.jobDescription || null,
+        resumeFileName: resumeName,
+        pdfFileName,
+        docxUrl: docxUpload.docxUrl,
+        pdfUrl: pdfUpload.pdfUrl,
+      },
     });
   } catch (err) {
-    console.error("Failed to create resume archive record:", err);
+    console.error("Failed to save resume archive record:", err);
     throw new AppError(500, "Failed to save application record");
   }
 

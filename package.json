@@ -10,7 +10,13 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "pm2:start": "npm run build && npx pm2 start ecosystem.config.cjs --only devora21-api",
+    "pm2:dev": "npx pm2 start ecosystem.config.cjs --only devora21-api-dev",
+    "pm2:restart": "npx pm2 restart devora21-api",
+    "pm2:stop": "npx pm2 stop devora21-api",
+    "pm2:status": "npx pm2 status",
+    "pm2:logs": "npx pm2 logs devora21-api --lines 80"
   },
   "keywords": [],
   "author": "",
@@ -49,6 +55,7 @@
     "@types/passport-oauth2": "^1.8.0",
     "@types/pizzip": "^3.0.5",
     "@types/uuid": "^10.0.0",
+    "pm2": "^7.0.4",
     "prisma": "^6.9.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"

@@ -1,12 +1,11 @@
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
-import { applyContentToDocx } from "../lib/resume/apply-content-to-docx";
 import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
 import { parseResumeTemplate } from "../lib/resume/parse-template";
 import { buildResumeSystemPrompt, buildResumeUserPrompt } from "../lib/resume/prompt";
 import { createChatCompletion, CLAUDE_MAX_OUTPUT_TOKENS } from "./claude.service";
-import { getUserResumeTemplate } from "./onboarding.service";
-import { archiveResume } from "./resume-archive.service";
+import { loadResumeTemplateForUser } from "./resume-template.service";
+import { renderResume } from "./resume-render.service";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
 import { scrapeJobFromUrl } from "./zyte.service";
 import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
@@ -212,10 +211,9 @@ async function runResumeFromJobPipeline(
         : `Scraped ${companyName} — ${jobTitle}; loading profile…`,
     });
 
-    let templateBase64: string;
+    let storedTemplate;
     try {
-      const template = await getUserResumeTemplate(userId);
-      templateBase64 = template.templateBase64;
+      storedTemplate = await loadResumeTemplateForUser({ userId });
     } catch (err) {
       if (err instanceof AppError && err.statusCode === 404) {
         throw new AppError(422, "Resume template not found. Upload a template in your profile.");
@@ -233,7 +231,7 @@ async function runResumeFromJobPipeline(
     });
     const customPrompt = resolved.content;
 
-    const templateBuffer = Buffer.from(templateBase64, "base64");
+    const templateBuffer = storedTemplate.buffer;
     const parsedTemplate = parseResumeTemplate(templateBuffer);
     const profileName =
       parsedTemplate.profileName?.trim() || (await loadProfileName(userId));
@@ -270,6 +268,7 @@ async function runResumeFromJobPipeline(
 
     let content;
     try {
+      // mergeWithTemplateSkeleton pad/clips bullets to template counts if AI errs.
       content = parseAndFinalizeResumeJson(ai.content, {
         layout: parsedTemplate.layout,
         jobs: parsedTemplate.jobs,
@@ -282,50 +281,48 @@ async function runResumeFromJobPipeline(
       throw new AppError(502, message);
     }
 
-    await setJobStatus(jobId, "filling", {
-      message: "Applying content to your DOCX template…",
-    });
-
-    let docxBuffer: Buffer;
-    try {
-      docxBuffer = applyContentToDocx(templateBuffer, content);
-    } catch (err) {
-      if (err instanceof AppError) throw err;
-      const message = err instanceof Error ? err.message : "Failed to fill resume DOCX";
-      throw new AppError(422, message);
-    }
-
-    const resumeFileName = `${(content.fileName || "resume").replace(/\.docx$/i, "")}.docx`;
     // Archive stores the job *posting* title (scraped), never the AI resume headline.
     const postingJobTitle = jobTitle;
+
+    await setJobStatus(jobId, "filling", {
+      jobTitle: postingJobTitle,
+      companyName,
+      resumeName: content.fileName
+        ? `${content.fileName.replace(/\.docx$/i, "")}.docx`
+        : undefined,
+      message: "Applying content to your DOCX template…",
+    });
 
     await setJobStatus(jobId, "rendering", {
       jobTitle: postingJobTitle,
       companyName,
-      resumeName: resumeFileName,
       message: "Converting DOCX → PDF and uploading DOCX+PDF to Backblaze…",
     });
 
-    const archived = await archiveResume({
-      userId,
+    // Same authoritative pipeline as POST /resume/render.
+    const rendered = await renderResume(userId, {
+      templateId: storedTemplate.templateId,
+      templateFileName: storedTemplate.fileName,
+      templateBuffer,
+      content,
       jobTitle: postingJobTitle,
       companyName,
       jobDescription,
-      datetime: new Date().toISOString(),
-      resumeFileName,
-      fileBuffer: docxBuffer,
+      customPrompt,
+      profileName,
+      includePdfBase64: false,
     });
 
     await setJobStatus(jobId, "done", {
-      archiveId: archived.id,
+      archiveId: rendered.archiveId,
       jobTitle: postingJobTitle,
       companyName,
-      resumeName: archived.resumeName,
-      pdfFileName: archived.pdfFileName,
-      pdfUrl: archived.pdfUrl,
+      resumeName: rendered.fileName,
+      pdfFileName: rendered.pdfFileName,
+      pdfUrl: rendered.pdfUrl ?? null,
       warning: scraped.warning ?? null,
       error: null,
-      message: `Ready: ${archived.pdfFileName}`,
+      message: `Ready: ${rendered.pdfFileName}`,
     });
   } catch (err) {
     const message =

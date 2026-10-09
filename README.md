@@ -11,6 +11,12 @@ Node.js + Express + TypeScript authentication backend with email/password, Googl
 - **Validation:** Zod
 - **CORS:** credentials enabled for the Netlify frontend
 
+## Keeping the API process up
+
+On this Windows host, run a **single** long-lived process under pm2 — do not kill/restart Cursor `npm run dev` terminals as a habit.
+
+See [docs/server-ops.md](docs/server-ops.md) for pm2 commands and the Prisma regenerate workflow.
+
 ## Quick start
 
 ### 1. Install dependencies

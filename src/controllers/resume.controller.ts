@@ -11,11 +11,14 @@ import {
   enqueueResumeFromJob,
   getResumeFromJobStatus,
 } from "../services/resume-from-job.service";
+import { renderResumeFromRequest } from "../services/resume-render.service";
+import { getResumeTemplatePdf } from "../services/resume-template.service";
 import type { ArchiveListFilters } from "../utils/archive-filters";
 import { parseExactFlag } from "../utils/archive-filters";
 import { AppError } from "../middleware/errorHandler";
 import { AuthenticatedRequest } from "../middleware/auth";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
+import type { ResumeRenderInput } from "../validators/resume-render.validator";
 
 function optionalQueryParam(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -54,6 +57,59 @@ export async function resumeFromJobHandler(
 
     const accepted = await enqueueResumeFromJob(userId, req.body as ResumeFromJobInput);
     res.status(202).json(accepted);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function resumeRenderHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.authUser?.id;
+    if (!userId) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const result = await renderResumeFromRequest(
+      userId,
+      req.body as ResumeRenderInput
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Original template DOCX → PDF as-is (no fill) for WYSIWYG preview. */
+export async function downloadResumeTemplatePdfHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.authUser?.id;
+    if (!userId) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const templateId = String(req.params.templateId ?? "").trim();
+    if (!templateId) {
+      throw new AppError(400, "templateId is required");
+    }
+
+    const pdf = await getResumeTemplatePdf({ userId, templateId });
+    const safeName = pdf.pdfFileName.replace(/["\\]/g, "_");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("ETag", `"${pdf.templateId}"`);
+    res.setHeader("Content-Length", String(pdf.buffer.length));
+    res.status(200).send(pdf.buffer);
   } catch (err) {
     next(err);
   }

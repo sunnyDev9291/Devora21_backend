@@ -17,8 +17,13 @@ export function unescapeXml(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
+/** Match a single w:p, including empty self-closing `<w:p .../>`. Fresh /g each call — avoids lastIndex bugs. */
+function paragraphRe(): RegExp {
+  return /<w:p\b(?:[^>]*\/>|[^>]*>[\s\S]*?<\/w:p>)/g;
+}
+
 export function extractParagraphs(documentXml: string): string[] {
-  const matches = documentXml.match(/<w:p[\s\S]*?<\/w:p>/g);
+  const matches = documentXml.match(paragraphRe());
   return matches ?? [];
 }
 
@@ -87,14 +92,48 @@ export function upsertParagraphTabsAndHanging(pPr: string, posTwips: number): st
   return props.replace(/<w:pPr([^>]*)\/>/, `<w:pPr$1>${tabsXml}${indXml}</w:pPr>`);
 }
 
+/**
+ * Keep icon / image runs when rewriting paragraph text.
+ * Contact rows and section headers often put a drawing in the same <w:p> as text;
+ * dropping them makes the filled DOCX look nothing like the template.
+ */
+export function extractDrawingRuns(pXml: string): string {
+  const out: string[] = [];
+  const runRe = /<w:r\b[^>]*>[\s\S]*?<\/w:r>/g;
+  let m: RegExpExecArray | null;
+  while ((m = runRe.exec(pXml)) !== null) {
+    if (!/w:drawing|w:pict|v:imagedata|w:object/i.test(m[0])) continue;
+    // Strip old text from drawing runs so placeholder words are not duplicated.
+    out.push(
+      m[0]
+        .replace(/<w:t\b[^>]*>[\s\S]*?<\/w:t>/g, "")
+        .replace(/<w:t\b[^>]*\/>/g, "")
+    );
+  }
+  return out.join("");
+}
+
 export function replaceParagraphContent(
   pXml: string,
   runsXml: string,
   pPrOverride?: string
 ): string {
+  // Empty spacer cells often use self-closing <w:p .../>; expand when writing text.
+  const selfClosing = pXml.match(/^<w:p\b([^>]*?)\s*\/>\s*$/);
+  if (selfClosing) {
+    const pPr = pPrOverride ?? "";
+    return `<w:p${selfClosing[1]}>${pPr}${runsXml}</w:p>`;
+  }
+
   const open = pXml.match(/^<w:p\b[^>]*>/)?.[0] ?? "<w:p>";
   const pPr = pPrOverride ?? getParagraphProps(pXml);
-  return `${open}${pPr}${runsXml}</w:p>`;
+  const drawings = extractDrawingRuns(pXml);
+  return `${open}${pPr}${drawings}${runsXml}</w:p>`;
+}
+
+/** True when the paragraph has no visible text (drawings-only spacers are OK). */
+export function paragraphHasVisibleText(pXml: string): boolean {
+  return Boolean(paragraphPlainText(pXml));
 }
 
 /**
@@ -225,17 +264,51 @@ export function setCategorySkillParagraph(
   );
 }
 
-export function rebuildDocumentXml(originalXml: string, paragraphs: string[]): string {
-  const bodyMatch = originalXml.match(/<w:body[^>]*>([\s\S]*)<\/w:body>/);
-  if (!bodyMatch) {
-    throw new Error("Invalid DOCX: missing w:body");
+/**
+ * Replace <w:p> nodes in document order without flattening the body.
+ * Templates often wrap paragraphs in <w:tbl>/<w:sdt>/etc — joining only
+ * <w:p> strips those wrappers and LibreOffice refuses to open the DOCX.
+ */
+function replaceParagraphsInXml(
+  originalXml: string,
+  paragraphs: string[],
+  label: string
+): string {
+  let i = 0;
+  const rebuilt = originalXml.replace(paragraphRe(), (match) => {
+    if (i >= paragraphs.length) {
+      return match;
+    }
+    const next = paragraphs[i];
+    i += 1;
+    return next;
+  });
+
+  if (i !== paragraphs.length) {
+    throw new Error(
+      `Invalid DOCX ${label}: paragraph count mismatch (xml=${i}, provided=${paragraphs.length})`
+    );
   }
 
-  const bodyInner = bodyMatch[1];
-  const sectPrMatch = bodyInner.match(/<w:sectPr[\s\S]*?<\/w:sectPr>\s*$/);
-  const sectPr = sectPrMatch?.[0] ?? "";
-  const newBody = `${paragraphs.join("")}${sectPr}`;
-  return originalXml.replace(bodyMatch[0], `<w:body>${newBody}</w:body>`);
+  return rebuilt;
+}
+
+export function rebuildDocumentXml(originalXml: string, paragraphs: string[]): string {
+  if (!/<w:body[\s>]/.test(originalXml)) {
+    throw new Error("Invalid DOCX: missing w:body");
+  }
+  return replaceParagraphsInXml(originalXml, paragraphs, "document");
+}
+
+/** Rebuild word/headerN.xml or footerN.xml paragraph list (container is w:hdr / w:ftr). */
+export function rebuildHeaderFooterXml(
+  originalXml: string,
+  paragraphs: string[]
+): string {
+  if (!/<w:hdr[\s>]/.test(originalXml) && !/<w:ftr[\s>]/.test(originalXml)) {
+    throw new Error("Invalid DOCX header/footer: missing w:hdr/w:ftr");
+  }
+  return replaceParagraphsInXml(originalXml, paragraphs, "header/footer");
 }
 
 export const SUMMARY_HEADER_RE =

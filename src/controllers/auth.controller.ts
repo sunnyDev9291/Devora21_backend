@@ -192,6 +192,34 @@ export async function profileResumeTemplateHandler(
   }
 }
 
+/** Original template DOCX → PDF (as-is) for WYSIWYG "View template". */
+export async function profileResumeTemplatePdfHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const { getResumeTemplatePdf } = await import("../services/resume-template.service");
+    const pdf = await getResumeTemplatePdf({ userId: req.authUser.id });
+    const safeName = pdf.pdfFileName.replace(/["\\]/g, "_");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+    // Never let browsers keep a stale template preview after replace-on-save.
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("ETag", `"${pdf.templateId}"`);
+    res.setHeader("Content-Length", String(pdf.buffer.length));
+    res.status(200).send(pdf.buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function profileAvatarHandler(
   req: AuthenticatedRequest,
   res: Response,

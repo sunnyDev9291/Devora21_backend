@@ -37,9 +37,11 @@ app.use(
     allowedHeaders: [
       "Content-Type",
       "Authorization",
+      "Accept",
       "X-User-Authorization",
       "X-User-Id",
     ],
+    exposedHeaders: ["X-Model"],
   })
 );
 

@@ -12,6 +12,7 @@ import {
   promptExtension,
 } from "../constants/profile-assets";
 import { replaceUserFile } from "./profile-storage.service";
+import { storeUserResumeTemplate } from "./resume-template.service";
 import { env } from "../config/env";
 
 function fieldError(field: string, message: string): AppError {
@@ -99,8 +100,13 @@ export async function saveAvatarFile(
 export async function saveResumeTemplateFile(
   userId: string,
   file: Express.Multer.File,
-  previousKey: string | null | undefined
-): Promise<{ resumeTemplateKey: string; resumeTemplateFileName: string }> {
+  previousKey: string | null | undefined,
+  existingTemplateId?: string | null
+): Promise<{
+  resumeTemplateId: string;
+  resumeTemplateKey: string;
+  resumeTemplateFileName: string;
+}> {
   const isDocxMime = file.mimetype === RESUME_TEMPLATE_MIME;
   const isDocxName = file.originalname.toLowerCase().endsWith(".docx");
 
@@ -115,17 +121,22 @@ export async function saveResumeTemplateFile(
     );
   }
 
-  const resumeTemplateKey = await replaceUserFile(
-    userId,
-    "resume-template.docx",
-    file.buffer,
-    previousKey
-  );
+  if (!file.buffer?.length) {
+    throw fieldError("resumeTemplate", "Resume template file is empty");
+  }
 
-  return {
-    resumeTemplateKey,
-    resumeTemplateFileName: sanitizeFilename(file.originalname),
-  };
+  // OOXML magic — reject non-DOCX even if the name lies.
+  if (file.buffer[0] !== 0x50 || file.buffer[1] !== 0x4b) {
+    throw fieldError("resumeTemplate", "Resume template must be a valid .docx file");
+  }
+
+  return storeUserResumeTemplate({
+    userId,
+    fileName: sanitizeFilename(file.originalname),
+    buffer: file.buffer,
+    previousStorageKey: previousKey,
+    existingTemplateId,
+  });
 }
 
 export async function savePromptFile(

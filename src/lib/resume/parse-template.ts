@@ -1,6 +1,12 @@
 import PizZip from "pizzip";
 import { AppError } from "../../middleware/errorHandler";
-import type { ParsedResumeTemplate, TemplateJobSkeleton, ResumeTemplateLayout } from "./types";
+import type {
+  HeaderStyleSlots,
+  ParsedResumeTemplate,
+  StyleSlotIndex,
+  TemplateJobSkeleton,
+  ResumeTemplateLayout,
+} from "./types";
 import {
   EDUCATION_HEADER_RE,
   EXPERIENCE_HEADER_RE,
@@ -10,6 +16,10 @@ import {
   findHeaderIndex,
   paragraphPlainText,
 } from "./xml-utils";
+import {
+  looksLikeStyledTemplate,
+  styleMatches,
+} from "./style-map";
 
 const PROJECT_FIELD_RE =
   /^(business\s*challenge|assigned\s*responsibility|action|result)\s*:?\s*/i;
@@ -248,9 +258,8 @@ function splitExperienceJobs(
       for (let p = blockStart; p < blockEnd; p += 1) {
         if (headerIdxSet.has(p)) continue;
         const t = paragraphPlainText(paragraphs[p]);
-        if (!t) continue;
         if (looksLikeLocationLine(t)) continue;
-        // Only real list/bullet paragraphs — never Heading* job titles.
+        // Count list slots even when empty (numPr with no text still occupies a slot).
         if (looksLikeBullet(paragraphs[p], t)) {
           bulletParaIndices.push(p);
         }
@@ -303,11 +312,16 @@ function splitExperienceJobs(
       }
     }
 
+    const bulletSamples = bulletParaIndices.map((i) =>
+      paragraphPlainText(paragraphs[i])
+    );
+
     return {
       company,
       role,
       dates,
-      bulletCount: layout === "bullets" ? Math.max(bulletParaIndices.length, 1) : 0,
+      // Exact template slot count — never invent a phantom bullet.
+      bulletCount: layout === "bullets" ? bulletParaIndices.length : 0,
       projectNames: projectBlocks.map((b) => b.name),
       startParaIndex: blockStart,
       endParaIndex: blockEnd,
@@ -316,6 +330,7 @@ function splitExperienceJobs(
       datesParaIndex,
       locationParaIndex,
       bulletParaIndices,
+      bulletSamples,
       projectBlocks,
     };
   };
@@ -357,6 +372,487 @@ function splitExperienceJobs(
   return jobs;
 }
 
+function collectHeaderParts(zip: PizZip): HeaderStyleSlots[] {
+  const parts: HeaderStyleSlots[] = [];
+  for (const key of Object.keys(zip.files)) {
+    if (!/^word\/header\d*\.xml$/i.test(key)) continue;
+    const file = zip.file(key);
+    if (!file) continue;
+    const xml = file.asText();
+    const paragraphs = extractParagraphs(xml);
+    let nameIndex: number | undefined;
+    let titleIndex: number | undefined;
+    paragraphs.forEach((pXml, i) => {
+      const style = getParagraphStyle(pXml);
+      if (styleMatches(style, "headerName") || styleMatches(style, "name")) {
+        if (nameIndex === undefined) nameIndex = i;
+      }
+      if (styleMatches(style, "headerTitle") || styleMatches(style, "title")) {
+        if (titleIndex === undefined) titleIndex = i;
+      }
+    });
+    if (nameIndex !== undefined || titleIndex !== undefined) {
+      parts.push({ partPath: key, xml, paragraphs, nameIndex, titleIndex });
+    }
+  }
+  return parts;
+}
+
+function findSectionHeader(
+  paragraphs: string[],
+  re: RegExp,
+  from = 0
+): number {
+  for (let i = from; i < paragraphs.length; i += 1) {
+    const style = getParagraphStyle(paragraphs[i]);
+    // Avoid false positives like skillcat "Languages" matching EDUCATION regex.
+    if (styleMatches(style, "skillCat") || styleMatches(style, "skillItem")) {
+      continue;
+    }
+    if (styleMatches(style, "expSection")) continue;
+    if (re.test(paragraphPlainText(paragraphs[i]))) return i;
+  }
+  return -1;
+}
+
+/** "Liberty Mutual Insurance | Senior Software Engineer" → company + role. */
+function parseCompanyPipeRole(text: string): { company: string; role: string } {
+  const parts = text
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) {
+    return { company: parts[0], role: parts.slice(1).join(" | ") };
+  }
+  return { company: text.trim(), role: text.trim() };
+}
+
+function collectJobStartsByStyle(
+  paragraphs: string[],
+  expStart: number,
+  expEnd: number,
+  field: "companyPeriod" | "companyName" | "companyRole"
+): number[] {
+  const starts: number[] = [];
+  for (let i = expStart; i < expEnd; i += 1) {
+    if (styleMatches(getParagraphStyle(paragraphs[i]), field)) {
+      starts.push(i);
+    }
+  }
+  return starts;
+}
+
+/**
+ * Templates that style only exp_section (date + "Company | Role" left Normal).
+ * Group contiguous exp_section runs; pull date/company lines from above each run.
+ */
+function parseStyledJobsFromExpSections(
+  paragraphs: string[],
+  expStart: number,
+  expEnd: number
+): TemplateJobSkeleton[] {
+  const jobs: TemplateJobSkeleton[] = [];
+  let i = expStart;
+  while (i < expEnd) {
+    if (!styleMatches(getParagraphStyle(paragraphs[i]), "expSection")) {
+      i += 1;
+      continue;
+    }
+
+    const bulletStart = i;
+    while (
+      i < expEnd &&
+      styleMatches(getParagraphStyle(paragraphs[i]), "expSection")
+    ) {
+      i += 1;
+    }
+    const bulletParaIndices: number[] = [];
+    for (let p = bulletStart; p < i; p += 1) {
+      bulletParaIndices.push(p);
+    }
+    if (bulletParaIndices.length === 0) continue;
+
+    // Walk upward for unstyled header lines (skip empties).
+    const above: Array<{ idx: number; text: string }> = [];
+    for (let p = bulletStart - 1; p >= expStart && above.length < 4; p -= 1) {
+      const style = getParagraphStyle(paragraphs[p]);
+      if (styleMatches(style, "expSection")) break;
+      if (
+        styleMatches(style, "skillCat") ||
+        styleMatches(style, "skillItem") ||
+        styleMatches(style, "summary")
+      ) {
+        break;
+      }
+      const text = paragraphPlainText(paragraphs[p]);
+      if (!text) continue;
+      // Stop at section titles like "Experience" / "Education".
+      if (EXPERIENCE_HEADER_RE.test(text) || EDUCATION_HEADER_RE.test(text)) {
+        break;
+      }
+      above.push({ idx: p, text });
+    }
+
+    let dates = "";
+    let datesParaIndex = bulletParaIndices[0];
+    let company = "";
+    let role = "";
+    let companyParaIndex = bulletParaIndices[0];
+    let roleParaIndex = bulletParaIndices[0];
+    let locationParaIndex: number | undefined;
+    let blockStart = bulletParaIndices[0];
+
+    // Typical order above bullets: [dates, company|role] (closest = company line).
+    const nearest = above[0];
+    const second = above[1];
+    if (nearest && !isDatesLine(nearest.text)) {
+      const parsed = parseCompanyPipeRole(nearest.text);
+      company = parsed.company;
+      role = parsed.role;
+      companyParaIndex = nearest.idx;
+      roleParaIndex = nearest.idx;
+      blockStart = Math.min(blockStart, nearest.idx);
+      if (looksLikeLocationLine(nearest.text)) {
+        locationParaIndex = nearest.idx;
+      }
+    } else if (nearest && isDatesLine(nearest.text)) {
+      dates = nearest.text;
+      datesParaIndex = nearest.idx;
+      blockStart = Math.min(blockStart, nearest.idx);
+    }
+
+    if (second) {
+      if (isDatesLine(second.text) && !dates) {
+        dates = second.text;
+        datesParaIndex = second.idx;
+        blockStart = Math.min(blockStart, second.idx);
+      } else if (!company && !isDatesLine(second.text)) {
+        const parsed = parseCompanyPipeRole(second.text);
+        company = parsed.company;
+        role = parsed.role;
+        companyParaIndex = second.idx;
+        roleParaIndex = second.idx;
+        blockStart = Math.min(blockStart, second.idx);
+      }
+    }
+
+    // If nearest was dates and second was company (unusual order), swap handled above.
+    if (!dates && nearest && isDatesLine(nearest.text)) {
+      dates = nearest.text;
+      datesParaIndex = nearest.idx;
+    }
+
+    const bulletSamples = bulletParaIndices.map((idx) =>
+      paragraphPlainText(paragraphs[idx])
+    );
+
+    jobs.push({
+      company: company || role || "Company",
+      role: role || company || "Role",
+      dates: dates || "",
+      bulletCount: bulletParaIndices.length,
+      projectNames: [],
+      startParaIndex: blockStart,
+      endParaIndex: i,
+      companyParaIndex,
+      roleParaIndex,
+      datesParaIndex,
+      locationParaIndex,
+      bulletParaIndices,
+      bulletSamples,
+      projectBlocks: [],
+    });
+  }
+  return jobs;
+}
+
+function parseStyledJobs(
+  paragraphs: string[],
+  expStart: number,
+  expEnd: number
+): TemplateJobSkeleton[] {
+  let jobStarts = collectJobStartsByStyle(
+    paragraphs,
+    expStart,
+    expEnd,
+    "companyPeriod"
+  );
+  if (jobStarts.length === 0) {
+    jobStarts = collectJobStartsByStyle(
+      paragraphs,
+      expStart,
+      expEnd,
+      "companyName"
+    );
+  }
+  if (jobStarts.length === 0) {
+    jobStarts = collectJobStartsByStyle(
+      paragraphs,
+      expStart,
+      expEnd,
+      "companyRole"
+    );
+  }
+
+  // Bullets styled, company headers left as Normal — still a valid Mode-1 template.
+  if (jobStarts.length === 0) {
+    return parseStyledJobsFromExpSections(paragraphs, expStart, expEnd);
+  }
+
+  const jobs: TemplateJobSkeleton[] = [];
+  for (let h = 0; h < jobStarts.length; h += 1) {
+    const start = jobStarts[h];
+    const end = h + 1 < jobStarts.length ? jobStarts[h + 1] : expEnd;
+
+    let companyParaIndex = start;
+    let roleParaIndex = start;
+    let datesParaIndex = start;
+    let locationParaIndex: number | undefined;
+    let company = "";
+    let role = "";
+    let dates = "";
+    const bulletParaIndices: number[] = [];
+
+    for (let p = start; p < end; p += 1) {
+      const style = getParagraphStyle(paragraphs[p]);
+      const text = paragraphPlainText(paragraphs[p]);
+      if (styleMatches(style, "companyPeriod")) {
+        datesParaIndex = p;
+        dates = text;
+      } else if (styleMatches(style, "companyLocation")) {
+        locationParaIndex = p;
+      } else if (styleMatches(style, "companyName")) {
+        companyParaIndex = p;
+        company = text;
+      } else if (styleMatches(style, "companyRole")) {
+        roleParaIndex = p;
+        role = text;
+      } else if (styleMatches(style, "expSection")) {
+        bulletParaIndices.push(p);
+      } else if (looksLikeBullet(paragraphs[p], text)) {
+        bulletParaIndices.push(p);
+      }
+    }
+
+    // Unstyled "Company | Role" / dates inside a styled job block.
+    if (!company || !role || !dates) {
+      for (let p = start; p < end; p += 1) {
+        const style = getParagraphStyle(paragraphs[p]);
+        if (
+          styleMatches(style, "companyPeriod") ||
+          styleMatches(style, "companyName") ||
+          styleMatches(style, "companyRole") ||
+          styleMatches(style, "companyLocation") ||
+          styleMatches(style, "expSection")
+        ) {
+          continue;
+        }
+        const text = paragraphPlainText(paragraphs[p]);
+        if (!text) continue;
+        if (!dates && isDatesLine(text)) {
+          dates = text;
+          datesParaIndex = p;
+        } else if (!company && text.includes("|")) {
+          const parsed = parseCompanyPipeRole(text);
+          company = parsed.company;
+          role = parsed.role || role;
+          companyParaIndex = p;
+          roleParaIndex = p;
+        }
+      }
+    }
+
+    const bulletSamples = bulletParaIndices.map((idx) =>
+      paragraphPlainText(paragraphs[idx])
+    );
+
+    jobs.push({
+      company: company || role || "Company",
+      role: role || company || "Role",
+      dates: dates || "",
+      bulletCount: bulletParaIndices.length,
+      projectNames: [],
+      startParaIndex: start,
+      endParaIndex: end,
+      companyParaIndex,
+      roleParaIndex,
+      datesParaIndex,
+      locationParaIndex,
+      bulletParaIndices,
+      bulletSamples,
+      projectBlocks: [],
+    });
+  }
+  return jobs;
+}
+
+function parseStyledTemplate(
+  zip: PizZip,
+  documentXml: string,
+  paragraphs: string[]
+): ParsedResumeTemplate {
+  const headerParts = collectHeaderParts(zip);
+
+  const styleSlots: StyleSlotIndex = {
+    summaryBodyIndices: [],
+    skillCatIndices: [],
+    skillItemIndices: [],
+  };
+
+  paragraphs.forEach((pXml, i) => {
+    const style = getParagraphStyle(pXml);
+    if (styleMatches(style, "name") && styleSlots.name === undefined) styleSlots.name = i;
+    if (styleMatches(style, "title") && !styleMatches(style, "headerTitle") && styleSlots.title === undefined) {
+      styleSlots.title = i;
+    }
+    if (styleMatches(style, "country") && styleSlots.country === undefined) styleSlots.country = i;
+    if (styleMatches(style, "phone") && styleSlots.phone === undefined) styleSlots.phone = i;
+    if (styleMatches(style, "email") && styleSlots.email === undefined) styleSlots.email = i;
+    if (styleMatches(style, "linkedin") && styleSlots.linkedin === undefined) styleSlots.linkedin = i;
+    if (styleMatches(style, "summary")) styleSlots.summaryBodyIndices.push(i);
+    if (styleMatches(style, "skillCat")) styleSlots.skillCatIndices.push(i);
+    if (styleMatches(style, "skillItem")) styleSlots.skillItemIndices.push(i);
+    if (styleMatches(style, "degree") && styleSlots.degree === undefined) styleSlots.degree = i;
+    if (styleMatches(style, "universityName") && styleSlots.universityName === undefined) {
+      styleSlots.universityName = i;
+    }
+    if (styleMatches(style, "universityPeriod") && styleSlots.universityPeriod === undefined) {
+      styleSlots.universityPeriod = i;
+    }
+  });
+
+  // Prefer body Name over header for profileName sample; title from resumetitle.
+  let profileName =
+    styleSlots.name !== undefined
+      ? paragraphPlainText(paragraphs[styleSlots.name])
+      : "";
+  if (!profileName && headerParts[0]?.nameIndex !== undefined) {
+    profileName = paragraphPlainText(headerParts[0].paragraphs[headerParts[0].nameIndex]);
+  }
+
+  let headerTitle =
+    styleSlots.title !== undefined
+      ? paragraphPlainText(paragraphs[styleSlots.title])
+      : "";
+  if (!headerTitle && headerParts[0]?.titleIndex !== undefined) {
+    headerTitle = paragraphPlainText(
+      headerParts[0].paragraphs[headerParts[0].titleIndex!]
+    );
+  }
+
+  const summaryHeaderIndex = findSectionHeader(paragraphs, SUMMARY_HEADER_RE);
+  let skillsHeaderIndex = findSectionHeader(
+    paragraphs,
+    SKILLS_HEADER_RE,
+    summaryHeaderIndex >= 0 ? summaryHeaderIndex + 1 : 0
+  );
+  // Fallback: first skillcat marks skills section
+  if (skillsHeaderIndex < 0 && styleSlots.skillCatIndices[0] !== undefined) {
+    skillsHeaderIndex = Math.max(0, styleSlots.skillCatIndices[0] - 1);
+  }
+
+  let experienceHeaderIndex = findSectionHeader(
+    paragraphs,
+    EXPERIENCE_HEADER_RE,
+    skillsHeaderIndex >= 0 ? skillsHeaderIndex + 1 : 0
+  );
+  // Accept "Work History" for styled templates
+  if (experienceHeaderIndex < 0) {
+    experienceHeaderIndex = findSectionHeader(
+      paragraphs,
+      /^(work\s+history|employment|career)\s*:?\s*$/i,
+      skillsHeaderIndex >= 0 ? skillsHeaderIndex + 1 : 0
+    );
+  }
+  // Fallback: first company period / company name / exp_section
+  if (experienceHeaderIndex < 0) {
+    for (let i = 0; i < paragraphs.length; i += 1) {
+      const style = getParagraphStyle(paragraphs[i]);
+      if (
+        styleMatches(style, "companyPeriod") ||
+        styleMatches(style, "companyName") ||
+        styleMatches(style, "companyRole") ||
+        styleMatches(style, "expSection")
+      ) {
+        experienceHeaderIndex = Math.max(0, i - 1);
+        break;
+      }
+    }
+  }
+
+  let educationHeaderIndex = findSectionHeader(
+    paragraphs,
+    /^(education|certifications|certificates|awards)\s*:?\s*$/i,
+    experienceHeaderIndex >= 0 ? experienceHeaderIndex + 1 : 0
+  );
+  if (educationHeaderIndex < 0 && styleSlots.degree !== undefined) {
+    educationHeaderIndex = Math.max(0, styleSlots.degree - 1);
+  }
+
+  const hasSummary =
+    summaryHeaderIndex >= 0 || styleSlots.summaryBodyIndices.length > 0;
+  const hasSkills =
+    skillsHeaderIndex >= 0 ||
+    styleSlots.skillCatIndices.length > 0 ||
+    styleSlots.skillItemIndices.length > 0;
+  const hasExperience = experienceHeaderIndex >= 0;
+
+  if (!hasSummary || !hasSkills || !hasExperience) {
+    throw new AppError(
+      422,
+      "Styled resume template missing required summary / skills / experience structure"
+    );
+  }
+
+  // Synthetic header indices for fill helpers when text headers are missing
+  const summaryIdx =
+    summaryHeaderIndex >= 0
+      ? summaryHeaderIndex
+      : Math.max(0, (styleSlots.summaryBodyIndices[0] ?? 1) - 1);
+  const skillsIdx =
+    skillsHeaderIndex >= 0
+      ? skillsHeaderIndex
+      : Math.max(summaryIdx + 1, (styleSlots.skillCatIndices[0] ?? summaryIdx + 2) - 1);
+  const experienceIdx =
+    experienceHeaderIndex >= 0 ? experienceHeaderIndex : skillsIdx + 1;
+
+  const expEnd =
+    educationHeaderIndex > experienceIdx ? educationHeaderIndex : paragraphs.length;
+  const jobs = parseStyledJobs(paragraphs, experienceIdx, expEnd);
+  if (jobs.length === 0) {
+    throw new AppError(422, "Resume template has no experience entries to fill");
+  }
+
+  const skillsSample = [
+    ...styleSlots.skillCatIndices.map((i, n) => {
+      const cat = paragraphPlainText(paragraphs[i]);
+      const itemIdx = styleSlots.skillItemIndices[n];
+      const item =
+        itemIdx !== undefined ? paragraphPlainText(paragraphs[itemIdx]) : "";
+      return item ? `${cat}: ${item}` : cat;
+    }),
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    mode: "styled",
+    layout: "bullets",
+    profileName,
+    headerTitle,
+    skillsSample,
+    jobs,
+    summaryHeaderIndex: summaryIdx,
+    skillsHeaderIndex: skillsIdx,
+    experienceHeaderIndex: experienceIdx,
+    educationHeaderIndex: educationHeaderIndex >= 0 ? educationHeaderIndex : null,
+    paragraphs,
+    documentXml,
+    styleSlots,
+    headerParts,
+  };
+}
+
 export function parseResumeTemplate(templateBuffer: Buffer): ParsedResumeTemplate {
   let zip: PizZip;
   try {
@@ -372,75 +868,22 @@ export function parseResumeTemplate(templateBuffer: Buffer): ParsedResumeTemplat
 
   const documentXml = file.asText();
   const paragraphs = extractParagraphs(documentXml);
-
-  const summaryHeaderIndex = findHeaderIndex(paragraphs, SUMMARY_HEADER_RE);
-  const skillsHeaderIndex = findHeaderIndex(
-    paragraphs,
-    SKILLS_HEADER_RE,
-    summaryHeaderIndex >= 0 ? summaryHeaderIndex + 1 : 0
-  );
-  const experienceHeaderIndex = findHeaderIndex(
-    paragraphs,
-    EXPERIENCE_HEADER_RE,
-    skillsHeaderIndex >= 0 ? skillsHeaderIndex + 1 : 0
-  );
-  let educationHeaderIndex = findHeaderIndex(
-    paragraphs,
-    EDUCATION_HEADER_RE,
-    experienceHeaderIndex >= 0 ? experienceHeaderIndex + 1 : 0
-  );
-  if (educationHeaderIndex < 0) {
-    educationHeaderIndex = -1;
+  const styleIds = paragraphs.map(getParagraphStyle);
+  for (const key of Object.keys(zip.files)) {
+    if (!/^word\/header\d*\.xml$/i.test(key)) continue;
+    const hdr = zip.file(key)?.asText();
+    if (!hdr) continue;
+    extractParagraphs(hdr).forEach((p) => styleIds.push(getParagraphStyle(p)));
   }
 
-  if (summaryHeaderIndex < 0 || skillsHeaderIndex < 0 || experienceHeaderIndex < 0) {
+  if (!looksLikeStyledTemplate(styleIds)) {
     throw new AppError(
       422,
-      "Resume template missing required SUMMARY / SKILLS / EXPERIENCE section headers"
+      "Resume template must use styled mode (Name, summary, skill_cat/skill_item, company_*, exp_section, etc.). Legacy text-header templates are not supported."
     );
   }
-  if (!(summaryHeaderIndex < skillsHeaderIndex && skillsHeaderIndex < experienceHeaderIndex)) {
-    throw new AppError(422, "Resume template section headers are out of order");
-  }
 
-  const expEnd = educationHeaderIndex > 0 ? educationHeaderIndex : paragraphs.length;
-  const layout = detectLayout(paragraphs, experienceHeaderIndex, expEnd);
-  const jobs = splitExperienceJobs(paragraphs, experienceHeaderIndex, expEnd, layout);
-  if (jobs.length === 0) {
-    throw new AppError(422, "Resume template has no experience entries to fill");
-  }
-
-  const skillsSample = paragraphs
-    .slice(skillsHeaderIndex + 1, experienceHeaderIndex)
-    .map(paragraphPlainText)
-    .filter(Boolean)
-    .join("\n");
-
-  const titleIdx = findTitleParaIndex(paragraphs, summaryHeaderIndex);
-  const headerTitle =
-    titleIdx >= 0 ? paragraphPlainText(paragraphs[titleIdx]) : "";
-
-  let profileName = "";
-  for (let i = 0; i < summaryHeaderIndex; i += 1) {
-    const t = paragraphPlainText(paragraphs[i]);
-    if (!t || looksLikeContactLine(t)) continue;
-    profileName = t.split("|")[0].trim();
-    break;
-  }
-
-  return {
-    layout,
-    profileName,
-    headerTitle,
-    skillsSample,
-    jobs,
-    summaryHeaderIndex,
-    skillsHeaderIndex,
-    experienceHeaderIndex,
-    educationHeaderIndex: educationHeaderIndex >= 0 ? educationHeaderIndex : null,
-    paragraphs,
-    documentXml,
-  };
+  return parseStyledTemplate(zip, documentXml, paragraphs);
 }
 
 export function openTemplateZip(templateBuffer: Buffer): PizZip {

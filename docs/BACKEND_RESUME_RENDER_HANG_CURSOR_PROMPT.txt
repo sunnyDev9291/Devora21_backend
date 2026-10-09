@@ -1,0 +1,13 @@
+GOAL
+Make POST /resume/render return archiveId (or fail with JSON) within ~60s.
+Do not hang forever on LibreOffice / storage.
+
+IMPLEMENTED (see src/services/resume-convert.service.ts + resume-render.service.ts)
+- Style-slot fill only (Mode 1) — applyContentToDocx
+- LibreOffice: 45s per attempt, 2 attempts, 55s overall convert ceiling
+- PowerShell WaitForExit(timeout) + kill on overrun (no infinite -Wait)
+- renderResume: 60s overall race → AppError 504 JSON
+- Phase logs: [resume/render] templateMs / fillMs / archiveMs / totalMs
+- [pdf-convert] start/ok/fail timings
+
+FE: 90s client timeout + "Rendering on server…" copy.

@@ -15,6 +15,7 @@ export interface FrontendUser {
   onboardingCompleted: boolean;
   provider: "google" | "local" | "email";
   createdAt?: string;
+  resumeTemplateId?: string | null;
   resumeTemplateFileName?: string | null;
   promptFileName?: string | null;
   listingUrls?: ListingUrls;
@@ -55,6 +56,10 @@ export function formatUserResponse(user: SafeUser): FrontendUser {
 
   if (user.avatarUrl) {
     formatted.avatar = user.avatarUrl;
+  }
+
+  if (user.resumeTemplateId) {
+    formatted.resumeTemplateId = user.resumeTemplateId;
   }
 
   if (user.resumeTemplateFileName) {

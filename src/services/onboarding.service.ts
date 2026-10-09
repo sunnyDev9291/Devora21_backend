@@ -21,6 +21,7 @@ import {
   invalidatePromptCache,
   setCachedPrompt,
 } from "../lib/resume/prompt-cache";
+import { ensureUserResumeTemplateId } from "./resume-template.service";
 
 function listingUrlsDbValue(
   listingUrls: ListingUrls
@@ -114,6 +115,7 @@ async function applyProfileFiles(
   userId: string,
   existing: {
     avatarStorageKey: string | null;
+    resumeTemplateId: string | null;
     resumeTemplateKey: string | null;
     promptFileKey: string | null;
   },
@@ -121,6 +123,7 @@ async function applyProfileFiles(
 ): Promise<{
   avatarStorageKey?: string | null;
   avatarUrl?: string | null;
+  resumeTemplateId?: string;
   resumeTemplateKey?: string;
   resumeTemplateFileName?: string;
   promptFileKey?: string;
@@ -130,6 +133,7 @@ async function applyProfileFiles(
   const updates: {
     avatarStorageKey?: string | null;
     avatarUrl?: string | null;
+    resumeTemplateId?: string;
     resumeTemplateKey?: string;
     resumeTemplateFileName?: string;
     promptFileKey?: string;
@@ -147,8 +151,10 @@ async function applyProfileFiles(
     const resume = await saveResumeTemplateFile(
       userId,
       input.files.resumeTemplate,
-      existing.resumeTemplateKey
+      existing.resumeTemplateKey,
+      existing.resumeTemplateId
     );
+    updates.resumeTemplateId = resume.resumeTemplateId;
     updates.resumeTemplateKey = resume.resumeTemplateKey;
     updates.resumeTemplateFileName = resume.resumeTemplateFileName;
   }
@@ -186,6 +192,7 @@ export async function completeOnboarding(
     userId,
     {
       avatarStorageKey: existing.avatarStorageKey,
+      resumeTemplateId: existing.resumeTemplateId,
       resumeTemplateKey: existing.resumeTemplateKey,
       promptFileKey: existing.promptFileKey,
     },
@@ -248,6 +255,7 @@ export async function updateUserProfile(
     userId,
     {
       avatarStorageKey: existing.avatarStorageKey,
+      resumeTemplateId: existing.resumeTemplateId,
       resumeTemplateKey: existing.resumeTemplateKey,
       promptFileKey: existing.promptFileKey,
     },
@@ -341,17 +349,20 @@ export async function getUserPrompt(userId: string): Promise<{
 }
 
 export async function getUserResumeTemplate(userId: string): Promise<{
+  templateId: string;
   fileName: string;
   templateBase64: string;
 }> {
+  const templateId = await ensureUserResumeTemplateId(userId);
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user?.resumeTemplateKey || !user.resumeTemplateFileName) {
+  if (!templateId || !user?.resumeTemplateKey || !user.resumeTemplateFileName) {
     throw new AppError(404, "Resume template not found");
   }
 
   const buffer = await readUserFile(user.resumeTemplateKey);
 
   return {
+    templateId,
     fileName: user.resumeTemplateFileName,
     templateBase64: buffer.toString("base64"),
   };

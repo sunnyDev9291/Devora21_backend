@@ -2,7 +2,6 @@ import { execFile } from "child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "util";
 import { v4 as uuidv4 } from "uuid";
 import { env } from "../config/env";
@@ -16,9 +15,13 @@ const WINDOWS_SOFFICE_PATHS = [
   "C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe",
 ];
 
-const CONVERT_TIMEOUT_MS = 180_000;
-const PDF_POLL_INTERVAL_MS = 500;
-const PDF_POLL_MAX_ATTEMPTS = 120;
+/** Soft ceiling per soffice invoke — keep /resume/render under FE ~90s budget. */
+const CONVERT_TIMEOUT_MS = 45_000;
+const PDF_POLL_INTERVAL_MS = 400;
+const PDF_POLL_MAX_ATTEMPTS = 25; // ~10s after soffice exits
+const CONVERT_ATTEMPTS = 2;
+/** Hard ceiling for the whole convertDocxBufferToPdf call (incl. queue wait + retries). */
+const CONVERT_OVERALL_MS = 55_000;
 
 let conversionQueue: Promise<void> = Promise.resolve();
 
@@ -33,6 +36,26 @@ function withConversionLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function raceWithTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new AppError(504, message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 function getConvertWorkBase(): string {
@@ -50,17 +73,19 @@ function resolveSofficeBinary(): string {
     }
   }
 
-  throw new AppError(422, "PDF conversion failed. Ensure LibreOffice is installed on the server.");
+  throw new AppError(
+    422,
+    "PDF conversion failed. Ensure LibreOffice is installed on the server."
+  );
 }
 
 function buildLibreOfficeEnv(sofficePath: string): NodeJS.ProcessEnv {
   const programDir = path.dirname(sofficePath);
-  const fundamentalIni = path.join(programDir, "fundamental.ini");
-
+  // Do not set URE_BOOTSTRAP — it crashes soffice.exe on this Windows host
+  // (MSVC exception 0xE06D7363 / exit 3765269347). Plain PATH is enough.
   return {
     ...process.env,
     PATH: `${programDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    URE_BOOTSTRAP: `vnd.sun.star.pathname:${pathToFileURL(fundamentalIni).href}`,
   };
 }
 
@@ -90,43 +115,46 @@ async function killStaleLibreOfficeProcesses(): Promise<void> {
 
   for (const image of ["soffice.bin", "soffice.exe"]) {
     await new Promise<void>((resolve) => {
-      execFile("taskkill", ["/F", "/IM", image, "/T"], { windowsHide: true }, () => resolve());
+      execFile("taskkill", ["/F", "/IM", image, "/T"], { windowsHide: true }, () =>
+        resolve()
+      );
     });
   }
 
-  await sleep(400);
+  await sleep(300);
 }
 
 async function convertWithPowerShell(docxBuffer: Buffer): Promise<Buffer> {
   const soffice = resolveSofficeBinary();
   const workDir = path.join(getConvertWorkBase(), uuidv4());
-  const profileDir = path.join(workDir, "profile");
   const docxPath = path.join(workDir, "resume.docx");
   const pdfPath = path.join(workDir, "resume.pdf");
 
   try {
-    await fs.mkdir(profileDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
     await fs.writeFile(docxPath, docxBuffer);
 
+    const timeoutSec = Math.ceil(CONVERT_TIMEOUT_MS / 1000);
     const psScript = [
       `$soffice = '${soffice.replace(/'/g, "''")}'`,
       `$docx = '${docxPath.replace(/'/g, "''")}'`,
       `$outDir = '${workDir.replace(/'/g, "''")}'`,
-      `$profile = '${profileDir.replace(/'/g, "''")}'`,
       `$pdf = '${pdfPath.replace(/'/g, "''")}'`,
-      `$profileUrl = 'file:///' + ($profile -replace '\\\\','/')`,
-      `$args = @('--headless', "-env:UserInstallation=$profileUrl", '--convert-to', 'pdf:writer_pdf_Export', '--outdir', $outDir, $docx)`,
-      `$proc = Start-Process -FilePath $soffice -ArgumentList $args -Wait -PassThru -WindowStyle Hidden`,
-      `$deadline = (Get-Date).AddSeconds(90)`,
-      `while ((Get-Date) -lt $deadline) { if (Test-Path $pdf) { break }; Start-Sleep -Milliseconds 500 }`,
+      // No UserInstallation — custom profiles crash/hang soffice on this host.
+      `$args = @('--headless','--norestore','--convert-to','pdf:writer_pdf_Export','--outdir',$outDir,$docx)`,
+      `$proc = Start-Process -FilePath $soffice -ArgumentList $args -PassThru -WindowStyle Hidden`,
+      `if (-not $proc.WaitForExit(${CONVERT_TIMEOUT_MS})) { try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}; Get-Process soffice*,soffice.bin -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; exit 1 }`,
+      `$deadline = (Get-Date).AddSeconds(${timeoutSec})`,
+      `while ((Get-Date) -lt $deadline) { if (Test-Path $pdf) { if ((Get-Item $pdf).Length -gt 100) { break } }; Start-Sleep -Milliseconds 400 }`,
       `if (-not (Test-Path $pdf)) { exit 1 }`,
+      `if ((Get-Item $pdf).Length -le 100) { exit 1 }`,
     ].join("; ");
 
     try {
       await execFileAsync(
         "powershell.exe",
         ["-NoProfile", "-NonInteractive", "-Command", psScript],
-        { windowsHide: true, timeout: CONVERT_TIMEOUT_MS }
+        { windowsHide: true, timeout: CONVERT_TIMEOUT_MS + 15_000 }
       );
     } catch (err) {
       console.warn("PowerShell LibreOffice invocation reported an error:", err);
@@ -146,16 +174,16 @@ async function convertWithExecFile(docxBuffer: Buffer): Promise<Buffer> {
   const soffice = resolveSofficeBinary();
   const programDir = path.dirname(soffice);
   const workDir = path.join(getConvertWorkBase(), uuidv4());
-  const profileDir = path.join(workDir, "profile");
   const docxPath = path.join(workDir, "resume.docx");
   const pdfPath = path.join(workDir, "resume.pdf");
 
   try {
-    await fs.mkdir(profileDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
     await fs.writeFile(docxPath, docxBuffer);
 
+    // Match the fast manual Windows invoke (no UserInstallation) — custom
+    // profiles have been crashing/hanging soffice on this host.
     const args = [
-      `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
       "--headless",
       "--norestore",
       "--convert-to",
@@ -188,47 +216,67 @@ async function convertWithExecFile(docxBuffer: Buffer): Promise<Buffer> {
 }
 
 async function runConversion(docxBuffer: Buffer): Promise<Buffer> {
-  if (isWindows) {
+  // Prefer direct soffice (fast on this Windows host ~2s without UserInstallation).
+  try {
+    return await convertWithExecFile(docxBuffer);
+  } catch (err) {
+    if (!isWindows) throw err;
+    console.warn("[pdf-convert] execFile path failed; trying PowerShell fallback:", err);
+    await killStaleLibreOfficeProcesses();
     return convertWithPowerShell(docxBuffer);
   }
-  return convertWithExecFile(docxBuffer);
 }
 
 export async function convertDocxBufferToPdf(docxBuffer: Buffer): Promise<Buffer> {
-  return withConversionLock(async () => {
-    if (docxBuffer.length < 1024) {
-      throw new AppError(422, "resume must be a valid DOCX file");
-    }
-
-    await killStaleLibreOfficeProcesses();
-
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      if (attempt > 1) {
-        await killStaleLibreOfficeProcesses();
-        await sleep(600 * (attempt - 1));
+  const started = Date.now();
+  return raceWithTimeout(
+    withConversionLock(async () => {
+      if (docxBuffer.length < 1024) {
+        throw new AppError(422, "resume must be a valid DOCX file");
       }
 
-      try {
-        return await runConversion(docxBuffer);
-      } catch (err) {
-        lastError = err;
-        console.error(`LibreOffice conversion attempt ${attempt} failed:`, err);
+      console.log(
+        `[pdf-convert] start bytes=${docxBuffer.length} queueWaitMs≈${Date.now() - started}`
+      );
+
+      let lastError: unknown;
+
+      for (let attempt = 1; attempt <= CONVERT_ATTEMPTS; attempt += 1) {
+        if (attempt > 1) {
+          await killStaleLibreOfficeProcesses();
+          await sleep(400 * (attempt - 1));
+        }
+
+        const attemptStarted = Date.now();
+        try {
+          const pdf = await runConversion(docxBuffer);
+          console.log(
+            `[pdf-convert] ok attempt=${attempt} ms=${Date.now() - attemptStarted} totalMs=${Date.now() - started}`
+          );
+          return pdf;
+        } catch (err) {
+          lastError = err;
+          console.error(
+            `[pdf-convert] fail attempt=${attempt} ms=${Date.now() - attemptStarted}:`,
+            err
+          );
+        }
       }
-    }
 
-    const debugPath = await saveFailedDocxDebug(docxBuffer).catch(() => null);
-    if (debugPath) {
-      console.error("Saved failed DOCX for debugging at:", debugPath);
-    }
+      const debugPath = await saveFailedDocxDebug(docxBuffer).catch(() => null);
+      if (debugPath) {
+        console.error("Saved failed DOCX for debugging at:", debugPath);
+      }
 
-    console.error("LibreOffice conversion failed after retries:", lastError);
-    throw new AppError(
-      422,
-      "PDF conversion failed. Ensure LibreOffice is installed on the server."
-    );
-  });
+      console.error("LibreOffice conversion failed after retries:", lastError);
+      throw new AppError(
+        504,
+        "PDF conversion timed out or failed. Try Apply again in a moment."
+      );
+    }),
+    CONVERT_OVERALL_MS,
+    `PDF conversion exceeded ${CONVERT_OVERALL_MS}ms`
+  );
 }
 
 export async function convertDocxToPdf(docxPath: string): Promise<Buffer> {

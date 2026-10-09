@@ -46,6 +46,7 @@ export interface SafeUser {
   emailVerified: boolean;
   resumeBuilderEnabled: boolean;
   onboardingCompleted: boolean;
+  resumeTemplateId: string | null;
   resumeTemplateKey: string | null;
   resumeTemplateFileName: string | null;
   promptFileKey: string | null;
@@ -66,6 +67,7 @@ export function toSafeUser(user: {
   emailVerified: boolean;
   resumeBuilderEnabled?: boolean;
   onboardingCompleted?: boolean;
+  resumeTemplateId?: string | null;
   resumeTemplateKey?: string | null;
   resumeTemplateFileName?: string | null;
   promptFileKey?: string | null;
@@ -86,6 +88,7 @@ export function toSafeUser(user: {
     emailVerified: user.emailVerified,
     resumeBuilderEnabled: user.resumeBuilderEnabled ?? false,
     onboardingCompleted: user.onboardingCompleted ?? false,
+    resumeTemplateId: user.resumeTemplateId ?? null,
     resumeTemplateKey: user.resumeTemplateKey ?? null,
     resumeTemplateFileName: user.resumeTemplateFileName ?? null,
     promptFileKey: user.promptFileKey ?? null,
@@ -242,10 +245,17 @@ export async function refreshTokens(
 }
 
 export async function getCurrentUser(userId: string): Promise<SafeUser> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  let user = await prisma.user.findUnique({ where: { id: userId } });
 
   if (!user) {
     throw new AppError(404, "User not found");
+  }
+
+  // Lazily backfill resumeTemplateId for legacy profiles that only have a file key.
+  if (user.resumeTemplateKey && !user.resumeTemplateId) {
+    const { ensureUserResumeTemplateId } = await import("./resume-template.service");
+    await ensureUserResumeTemplateId(userId);
+    user = (await prisma.user.findUnique({ where: { id: userId } })) ?? user;
   }
 
   return toSafeUser(user);

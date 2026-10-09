@@ -36,8 +36,13 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
     '  "fileName": "<optional string>",',
     `  "experiences": [ ${experienceShape} ]`,
     "}",
-    'Put company/dates from the frozen template jobs. Put role/bullets/projects text per the profile writing prompt.',
-    '"skills" must be one string (use newlines inside it if the profile prompt uses category lines).',
+    "You write: title, summary, skills, fileName, and experience bullets (or project field text).",
+    "For each experience, copy company/role/dates from the frozen template jobs list;",
+    "only the bullets (or project narrative fields) are new writing.",
+    layout === "bullets"
+      ? "HARD RULE: each experiences[i].bullets array length MUST equal that job's template bullet count (see frozen jobs list). Every bullet string non-empty."
+      : "HARD RULE: each experience's projects array must match the frozen project names/count.",
+    '"skills" must be one string (newlines for category lines).',
     "Do not nest title/summary/skills under personalInfo or content.",
   ].join("\n");
 }

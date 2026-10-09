@@ -25,7 +25,7 @@ const optionalPromptOverride = z.preprocess((value) => {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}, z.string().max(50_000).optional());
+}, z.string().max(500_000).optional());
 
 /** Only the literal JSON boolean true enables resume JSON mode. */
 const strictJsonObjectSchema = z.preprocess(
@@ -36,13 +36,14 @@ const strictJsonObjectSchema = z.preprocess(
 export const chatCompletionsSchema = z
   .object({
     messages: z.array(chatMessageSchema).min(1, "messages is required"),
+    /** Accepted for FE compat but ignored — Sonnet always uses model max (128k). */
     maxTokens: z
       .number()
       .int()
       .positive()
-      .max(64_000)
+      .max(128_000)
       .optional()
-      .default(64_000),
+      .default(128_000),
     jsonObject: strictJsonObjectSchema.optional().default(false),
     /**
      * BFF / internal-key only: which user's profile prompt to apply.

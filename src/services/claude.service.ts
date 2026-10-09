@@ -6,10 +6,18 @@ import {
 } from "./mock-ai.service";
 
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
-export const CLAUDE_MODEL = "claude-sonnet-4-6";
-/** Max synchronous output for claude-sonnet-4-6 (API hard cap; not truly unlimited). */
-export const CLAUDE_MAX_OUTPUT_TOKENS = 64_000;
-const AI_REQUEST_TIMEOUT_MS = 300_000;
+export const CLAUDE_MODEL = "claude-sonnet-5-5";
+/**
+ * Sonnet 5.5 output ceiling (API allows up to 128k).
+ * We always request this — no artificial 16k/64k app caps.
+ */
+export const CLAUDE_MAX_OUTPUT_TOKENS = 128_000;
+/** Fail if Anthropic never starts sending the response body. */
+const AI_CONNECT_TIMEOUT_MS = 30_000;
+/** Fail if no stream bytes arrive for this long after headers / last chunk. */
+const AI_IDLE_TIMEOUT_MS = 120_000;
+/** Absolute ceiling for an entire stream (including generation). */
+const AI_REQUEST_TIMEOUT_MS = 600_000;
 const ANTHROPIC_VERSION = "2023-06-01";
 
 interface ClaudeMessageResponse {
@@ -20,9 +28,13 @@ interface ClaudeMessageResponse {
 
 interface ClaudeStreamEvent {
   type?: string;
+  content_block?: {
+    type?: string;
+  };
   delta?: {
     type?: string;
     text?: string;
+    stop_reason?: string;
   };
   error?: {
     message?: string;
@@ -73,10 +85,15 @@ function buildClaudeBody(input: ClaudeChatInput, stream: boolean): Record<string
 
   const body: Record<string, unknown> = {
     model: CLAUDE_MODEL,
-    max_tokens: input.maxTokens,
+    // Always use the model ceiling — ignore smaller client maxTokens.
+    max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
     messages,
     stream,
+    // Sonnet 5.5: "disabled" is rejected. "between_tools" turns off up-front
+    // thinking so the full max_tokens stays available for streamed text/JSON.
+    thinking: { type: "between_tools" },
   };
+  void input.maxTokens;
 
   if (system) {
     body.system = system;
@@ -147,37 +164,113 @@ export async function createChatCompletion(
   return { content, model: CLAUDE_MODEL };
 }
 
+function raceWithTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+export type StreamChatHandlers = {
+  /** Fired once Anthropic accepts the stream (before first text delta). */
+  onUpstreamReady?: () => void;
+  onText: (text: string) => void;
+};
+
 /**
  * Streams raw AI text chunks (plain text) from Claude's streaming API.
- * Caller writes these directly to the HTTP response body.
+ * Caller writes these directly to the HTTP response body as they arrive —
+ * never wait for a complete JSON object.
+ *
+ * Connect failures throw BEFORE onUpstreamReady so the HTTP handler can still
+ * return JSON 502/504. After onUpstreamReady, mid-stream errors should be
+ * written as plain-text `[error] …` lines.
  */
 export async function streamChatCompletion(
   input: ClaudeChatInput,
-  onText: (text: string) => void
+  onTextOrHandlers: ((text: string) => void) | StreamChatHandlers
 ): Promise<void> {
+  const handlers: StreamChatHandlers =
+    typeof onTextOrHandlers === "function"
+      ? { onText: onTextOrHandlers }
+      : onTextOrHandlers;
+
   if (aiMockEnabled) {
-    await streamMockChatCompletion(input, onText);
+    handlers.onUpstreamReady?.();
+    await streamMockChatCompletion(input, handlers.onText);
     return;
   }
 
-  const response = await fetch(CLAUDE_API_URL, {
-    method: "POST",
-    headers: claudeHeaders(),
-    body: JSON.stringify(buildClaudeBody(input, true)),
-    signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
-  });
+  const overallAbort = new AbortController();
+  const overallTimer = setTimeout(
+    () => overallAbort.abort(),
+    AI_REQUEST_TIMEOUT_MS
+  );
+
+  let response: Response;
+  try {
+    response = await raceWithTimeout(
+      fetch(CLAUDE_API_URL, {
+        method: "POST",
+        headers: claudeHeaders(),
+        body: JSON.stringify(buildClaudeBody(input, true)),
+        signal: overallAbort.signal,
+      }),
+      AI_CONNECT_TIMEOUT_MS,
+      `Claude upstream connect timeout after ${AI_CONNECT_TIMEOUT_MS}ms`
+    );
+  } catch (err) {
+    clearTimeout(overallTimer);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Claude request aborted after ${AI_REQUEST_TIMEOUT_MS}ms`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
+    clearTimeout(overallTimer);
     throw new Error(await parseClaudeError(response));
   }
 
   if (!response.body) {
+    clearTimeout(overallTimer);
     throw new Error("Claude returned an empty stream");
   }
+
+  // Upstream accepted — safe to open the client stream response now.
+  handlers.onUpstreamReady?.();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let upstreamOpened = true;
+  let textChars = 0;
+  let sawThinking = false;
+  let stopReason: string | null = null;
+
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      void reader.cancel().catch(() => undefined);
+      overallAbort.abort();
+    }, AI_IDLE_TIMEOUT_MS);
+  };
+
+  resetIdle();
 
   try {
     while (true) {
@@ -185,6 +278,7 @@ export async function streamChatCompletion(
       if (done) {
         break;
       }
+      resetIdle();
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -207,15 +301,52 @@ export async function streamChatCompletion(
           continue;
         }
 
+        if (event.error?.message) {
+          throw new Error(event.error.message);
+        }
+
+        if (
+          event.type === "content_block_start" &&
+          event.content_block?.type === "thinking"
+        ) {
+          sawThinking = true;
+        }
+
+        if (event.type === "message_delta" && event.delta?.stop_reason) {
+          stopReason = event.delta.stop_reason;
+        }
+
+        // Only forward visible text — ignore thinking_delta / signature_delta.
         if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
           const text = event.delta.text;
           if (text) {
-            onText(text);
+            textChars += text.length;
+            handlers.onText(text);
           }
         }
       }
     }
+
+    if (textChars === 0) {
+      const hint = sawThinking
+        ? " (upstream returned thinking only — max_tokens likely exhausted before text)"
+        : "";
+      throw new Error(
+        `Claude returned empty text stream${hint}${
+          stopReason ? ` stop_reason=${stopReason}` : ""
+        }`
+      );
+    }
+  } catch (err) {
+    if (overallAbort.signal.aborted && upstreamOpened) {
+      throw new Error(
+        `Claude upstream idle/timeout after ${AI_IDLE_TIMEOUT_MS}ms without bytes`
+      );
+    }
+    throw err;
   } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    clearTimeout(overallTimer);
     reader.releaseLock();
   }
 }

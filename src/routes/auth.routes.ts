@@ -9,6 +9,7 @@ import {
   onboardingHandler,
   profilePromptHandler,
   profileResumeTemplateHandler,
+  profileResumeTemplatePdfHandler,
   profileAvatarHandler,
   forgotPasswordHandler,
   resetPasswordHandler,
@@ -52,6 +53,12 @@ router.post("/api-keys", requireAuth, createApiKeyHandler);
 router.delete("/api-keys/:id", requireAuth, revokeApiKeyHandler);
 
 router.get("/profile/prompt", requireAuth, profilePromptHandler);
+router.get(
+  "/profile/resume-template/pdf",
+  requireAuth,
+  requireResumeBuilder,
+  profileResumeTemplatePdfHandler
+);
 router.get("/profile/resume-template", requireAuth, requireResumeBuilder, profileResumeTemplateHandler);
 router.get("/profile/avatar", requireAuth, profileAvatarHandler);
 router.patch("/profile", requireAuth, profileUploadHandler, profileHandler);

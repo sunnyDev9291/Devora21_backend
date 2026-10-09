@@ -7,8 +7,10 @@ import {
   downloadResumeArchivePdfHandler,
   handleUploadError,
   listResumeArchivesHandler,
+  downloadResumeTemplatePdfHandler,
   resumeFromJobHandler,
   resumeFromJobStatusHandler,
+  resumeRenderHandler,
 } from "../controllers/resume.controller";
 import {
   ackRemoteDeliveryHandler,
@@ -27,6 +29,7 @@ import { requireRemoteDevice } from "../middleware/remote-device-auth";
 import { resumeUpload } from "../middleware/upload";
 import { validateBody } from "../middleware/validate";
 import { resumeFromJobSchema } from "../validators/resume-from-job.validator";
+import { resumeRenderSchema } from "../validators/resume-render.validator";
 import {
   ackRemoteDeliverySchema,
   createRemoteDeviceSchema,
@@ -46,6 +49,26 @@ router.post(
   requireRemoteDevice,
   validateBody(ackRemoteDeliverySchema),
   ackRemoteDeliveryHandler
+);
+
+/**
+ * Authoritative render: stored template + structured content → DOCX + PDF archive.
+ * Preview/download use /archives/{archiveId}/pdf|docx.
+ */
+router.post(
+  "/render",
+  requireAuth,
+  requireResumeBuilder,
+  validateBody(resumeRenderSchema),
+  resumeRenderHandler
+);
+
+/** Original stored template → PDF as-is (no content fill). */
+router.get(
+  "/templates/:templateId/pdf",
+  requireAuth,
+  requireResumeBuilder,
+  downloadResumeTemplatePdfHandler
 );
 
 /** Async: job URL → scrape → AI → DOCX → PDF. Returns jobId immediately. */

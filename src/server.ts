@@ -17,6 +17,7 @@ import { verifyEmailTransport } from "./services/email.service";
 import { prisma } from "./lib/prisma";
 
 import { logger } from "./lib/logger";
+import { CLAUDE_MODEL } from "./services/claude.service";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -42,7 +43,7 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
     if (aiMockEnabled) {
       console.log("  AI responses: mocked (no Claude API calls)");
     } else {
-      console.log("  Model: claude-sonnet-4-6 (thinking off; plain-text Claude stream)");
+      console.log(`  Model: ${CLAUDE_MODEL} (thinking: between_tools; plain-text stream)`);
     }
     console.log(
       `  AI internal auth: ${env.AI_INTERNAL_API_KEY ? "required (Bearer token)" : "open (local dev only)"}`
