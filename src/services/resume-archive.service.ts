@@ -25,6 +25,21 @@ import {
   uploadDocxToBackblaze,
   uploadPdfToBackblaze,
 } from "./backblaze.service";
+import {
+  interviewHistoryDbValue,
+  interviewHistoryView,
+  parseInterviewHistory,
+  type InterviewHistoryView,
+  type InterviewRoundRecord,
+} from "../lib/interview-history";
+import {
+  archiveAccessWhere,
+  auditArchiveAccess,
+  findAccessibleArchive,
+  type ArchiveAccessCaller,
+} from "../lib/archive-access";
+
+export type { ArchiveAccessCaller };
 
 const ARCHIVE_LIST_SELECT = {
   id: true,
@@ -36,12 +51,21 @@ const ARCHIVE_LIST_SELECT = {
   pdfFileName: true,
   docxUrl: true,
   pdfUrl: true,
+  interviewHistory: true,
 } as const;
+
+/** Lean list: never SELECT jobDescription body. */
+const ARCHIVE_LEAN_HAS_JD_SQL = Prisma.sql`(
+  "jobDescription" IS NOT NULL AND length(btrim("jobDescription")) > 0
+)`;
 
 /** Public (no-auth) Devora share URL — fallback if B2 signing fails. */
 export function buildPublicShareUrl(archiveId: string, kind: "pdf" | "docx"): string {
   return `${env.API_BASE_URL.replace(/\/$/, "")}/resume/share/${archiveId}/${kind}`;
 }
+
+/** Persist values for ResumeArchive.generationMethod. */
+export type ResumeGenerationMethod = "web_ui" | "one_click_api";
 
 export interface ArchiveResumeInput {
   userId: string;
@@ -56,6 +80,8 @@ export interface ArchiveResumeInput {
   archiveId?: string;
   /** Template used to produce this archive. */
   templateId?: string | null;
+  /** Defaults to web_ui. */
+  generationMethod?: ResumeGenerationMethod;
 }
 
 export interface ArchiveResumeResult {
@@ -68,7 +94,7 @@ export interface ArchiveResumeResult {
   pdfBase64?: string;
 }
 
-export interface ResumeArchiveListItem {
+export interface ResumeArchiveListItem extends InterviewHistoryView {
   id: string;
   bidAt: string;
   jobTitle: string;
@@ -79,6 +105,22 @@ export interface ResumeArchiveListItem {
   docxUrl?: string;
   pdfUrl?: string;
 }
+
+/** Saved Resumes tab fast path — no JD body in payload. */
+export interface ResumeArchiveLeanListItem extends InterviewHistoryView {
+  id: string;
+  bidAt: string;
+  jobTitle: string;
+  companyName: string;
+  resumeFileName: string;
+  pdfFileName: string;
+  hasJobDescription: boolean;
+}
+
+export type ListResumeArchivesOptions = {
+  /** When true: omit jobDescription bodies; include hasJobDescription. */
+  lean?: boolean;
+};
 
 function assertDocxBuffer(buffer: Buffer): void {
   if (buffer.length < 1024) {
@@ -104,7 +146,9 @@ function formatListItem(archive: {
   pdfFileName: string;
   docxUrl?: string | null;
   pdfUrl?: string | null;
+  interviewHistory?: unknown;
 }): ResumeArchiveListItem {
+  const history = interviewHistoryView(archive.interviewHistory);
   return {
     id: archive.id,
     bidAt: archive.bidAt.toISOString(),
@@ -113,6 +157,8 @@ function formatListItem(archive: {
     jobDescription: archive.jobDescription ?? "",
     resumeFileName: archive.resumeFileName,
     pdfFileName: archive.pdfFileName,
+    interviewHistory: history.interviewHistory,
+    nextInterviewRound: history.nextInterviewRound,
     ...(archive.docxUrl ? { docxUrl: archive.docxUrl } : {}),
     ...(archive.pdfUrl ? { pdfUrl: archive.pdfUrl } : {}),
   };
@@ -204,6 +250,9 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
     }),
   ]);
 
+  const generationMethod: ResumeGenerationMethod =
+    input.generationMethod === "one_click_api" ? "one_click_api" : "web_ui";
+
   try {
     await prisma.resumeArchive.upsert({
       where: { id: archiveId },
@@ -221,6 +270,7 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
         pdfStorageKey: null,
         docxUrl: docxUpload.docxUrl,
         pdfUrl: pdfUpload.pdfUrl,
+        generationMethod,
       },
       update: {
         templateId: input.templateId ?? undefined,
@@ -232,6 +282,7 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
         pdfFileName,
         docxUrl: docxUpload.docxUrl,
         pdfUrl: pdfUpload.pdfUrl,
+        generationMethod,
       },
     });
   } catch (err) {
@@ -255,11 +306,68 @@ export async function archiveResume(input: ArchiveResumeInput): Promise<ArchiveR
   };
 }
 
+async function listResumeArchivesLean(
+  userId: string,
+  filters: ArchiveListFilters
+): Promise<ResumeArchiveLeanListItem[]> {
+  const whereClause = buildArchiveWhereSql(userId, filters);
+  const limitClause = isCompanyTypeahead(filters)
+    ? Prisma.sql`LIMIT ${COMPANY_TYPEAHEAD_LIMIT}`
+    : Prisma.empty;
+
+  const rows = await prisma.$queryRaw<
+    Array<{
+      id: string;
+      bidAt: Date;
+      jobTitle: string;
+      companyName: string;
+      resumeFileName: string;
+      pdfFileName: string;
+      hasJobDescription: boolean;
+      interviewHistory: unknown;
+    }>
+  >`
+    SELECT
+      id,
+      "bidAt",
+      "jobTitle",
+      "companyName",
+      "resumeFileName",
+      "pdfFileName",
+      ${ARCHIVE_LEAN_HAS_JD_SQL} AS "hasJobDescription",
+      interview_history AS "interviewHistory"
+    FROM resume_archives
+    ${whereClause}
+    ORDER BY "bidAt" DESC
+    ${limitClause}
+  `;
+
+  return rows.map((r) => {
+    const history = interviewHistoryView(r.interviewHistory);
+    return {
+      id: r.id,
+      bidAt: r.bidAt.toISOString(),
+      jobTitle: r.jobTitle,
+      companyName: r.companyName,
+      resumeFileName: r.resumeFileName,
+      pdfFileName: r.pdfFileName,
+      hasJobDescription: Boolean(r.hasJobDescription),
+      interviewHistory: history.interviewHistory,
+      nextInterviewRound: history.nextInterviewRound,
+    };
+  });
+}
+
 export async function listResumeArchives(
   userId: string,
-  filters: ArchiveListFilters = {}
-): Promise<ResumeArchiveListItem[]> {
+  filters: ArchiveListFilters = {},
+  options: ListResumeArchivesOptions = {}
+): Promise<ResumeArchiveListItem[] | ResumeArchiveLeanListItem[]> {
   const normalized = normalizeArchiveListFilters(filters);
+
+  if (options.lean) {
+    return listResumeArchivesLean(userId, normalized);
+  }
 
   // Fast path: no filters, or only company/jobTitle via Prisma (uses userId indexes).
   const prismaFastPath =
@@ -310,6 +418,7 @@ export async function listResumeArchives(
       pdfFileName: string;
       docxUrl: string | null;
       pdfUrl: string | null;
+      interviewHistory: unknown;
     }>
   >`
     SELECT
@@ -321,7 +430,8 @@ export async function listResumeArchives(
       "resumeFileName",
       "pdfFileName",
       "docxUrl",
-      "pdfUrl"
+      "pdfUrl",
+      interview_history AS "interviewHistory"
     FROM resume_archives
     ${whereClause}
     ORDER BY "bidAt" DESC
@@ -329,6 +439,292 @@ export async function listResumeArchives(
   `;
 
   return rows.map(formatListItem);
+}
+
+function toCaller(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  isSuperAdmin?: boolean
+): ArchiveAccessCaller {
+  if (typeof userIdOrCaller === "string") {
+    return { userId: userIdOrCaller, isSuperAdmin: Boolean(isSuperAdmin) };
+  }
+  return {
+    userId: userIdOrCaller.userId,
+    isSuperAdmin: Boolean(userIdOrCaller.isSuperAdmin),
+  };
+}
+
+/** On-demand JD for Saved Resumes “View description” / “Use JD”. */
+export async function getResumeArchiveJobDescription(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  isSuperAdmin?: boolean
+): Promise<{ id: string; jobDescription: string }> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const row = await findAccessibleArchive(archiveId, caller, {
+    jobDescription: true,
+  });
+
+  auditArchiveAccess({
+    action: "job-description",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
+    archiveId: row.id,
+    ownerProfileId: row.userId,
+  });
+
+  return {
+    id: row.id,
+    jobDescription: row.jobDescription?.trim() ? row.jobDescription : "",
+  };
+}
+
+/** Full archive item for owner (FE last-resort fallback). */
+export async function getResumeArchiveForUser(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  isSuperAdmin?: boolean
+): Promise<ResumeArchiveListItem> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const row = await findAccessibleArchive(archiveId, caller, ARCHIVE_LIST_SELECT);
+  return formatListItem(row);
+}
+
+export type RecordInterviewAction = "round" | "other";
+
+export type RecordInterviewRoundResult = InterviewHistoryView & {
+  id: string;
+  bidAt: string;
+  /** Set when action=round; null for other (no history change). */
+  recordedRound: number | null;
+  recordedAt: string | null;
+};
+
+/**
+ * Record the next interview round before/with a Round-N download.
+ * action=other is a no-op (history unchanged) so FE can call uniformly if desired.
+ * Super Admin may record on any archive; history stays on the shared archive row.
+ */
+export async function recordInterviewRound(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  action: RecordInterviewAction,
+  isSuperAdmin?: boolean
+): Promise<RecordInterviewRoundResult> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  if (action !== "round" && action !== "other") {
+    throw new AppError(400, 'action must be "round" or "other"');
+  }
+
+  const existing = await findAccessibleArchive(archiveId, caller, {
+    bidAt: true,
+    interviewHistory: true,
+  });
+
+  const current = interviewHistoryView(existing.interviewHistory);
+  if (action === "other") {
+    auditArchiveAccess({
+      action: "interview-round-other",
+      callerUserId: caller.userId,
+      isSuperAdmin: caller.isSuperAdmin,
+      archiveId: existing.id,
+      ownerProfileId: existing.userId,
+    });
+    return {
+      id: existing.id,
+      bidAt: existing.bidAt.toISOString(),
+      interviewHistory: current.interviewHistory,
+      nextInterviewRound: current.nextInterviewRound,
+      recordedRound: null,
+      recordedAt: null,
+    };
+  }
+
+  const where = archiveAccessWhere(archiveId, caller);
+
+  // Serialize concurrent Round clicks with a transaction + fresh read.
+  const result = await prisma.$transaction(async (tx) => {
+    const row = await tx.resumeArchive.findFirst({
+      where,
+      select: {
+        id: true,
+        userId: true,
+        bidAt: true,
+        interviewHistory: true,
+      },
+    });
+    if (!row) {
+      throw new AppError(404, "Resume archive not found");
+    }
+
+    const history = parseInterviewHistory(row.interviewHistory);
+    const round =
+      history.length === 0 ? 1 : Math.max(...history.map((r) => r.round)) + 1;
+    const downloadedAt = new Date().toISOString();
+    const next: InterviewRoundRecord[] = [
+      ...history,
+      { round, downloadedAt },
+    ];
+
+    await tx.resumeArchive.update({
+      where: { id: row.id },
+      data: { interviewHistory: interviewHistoryDbValue(next) },
+    });
+
+    return {
+      id: row.id,
+      ownerProfileId: row.userId,
+      bidAt: row.bidAt.toISOString(),
+      interviewHistory: next,
+      nextInterviewRound: round + 1,
+      recordedRound: round,
+      recordedAt: downloadedAt,
+    };
+  });
+
+  auditArchiveAccess({
+    action: "interview-round",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
+    archiveId: result.id,
+    ownerProfileId: result.ownerProfileId,
+    meta: { recordedRound: result.recordedRound },
+  });
+
+  return {
+    id: result.id,
+    bidAt: result.bidAt,
+    interviewHistory: result.interviewHistory,
+    nextInterviewRound: result.nextInterviewRound,
+    recordedRound: result.recordedRound,
+    recordedAt: result.recordedAt,
+  };
+}
+
+export async function getInterviewHistoryForUser(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  isSuperAdmin?: boolean
+): Promise<
+  InterviewHistoryView & {
+    id: string;
+    bidAt: string;
+    companyName: string;
+    jobTitle: string;
+  }
+> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const row = await findAccessibleArchive(archiveId, caller, {
+    bidAt: true,
+    companyName: true,
+    jobTitle: true,
+    interviewHistory: true,
+  });
+
+  const history = interviewHistoryView(row.interviewHistory);
+  return {
+    id: row.id,
+    bidAt: row.bidAt.toISOString(),
+    companyName: row.companyName,
+    jobTitle: row.jobTitle,
+    interviewHistory: history.interviewHistory,
+    nextInterviewRound: history.nextInterviewRound,
+  };
+}
+
+export type DeleteInterviewRoundResult = InterviewHistoryView & {
+  id: string;
+  bidAt: string;
+  deletedRound: number;
+};
+
+/**
+ * Remove one recorded interview round (mistake correction).
+ * Preferred policy: keep remaining round numbers as-is (gaps allowed).
+ * nextInterviewRound = max(remaining) + 1, or 1 if empty.
+ * Does not touch bidAt / Applied.
+ */
+export async function deleteInterviewRound(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  roundRaw: number | string,
+  isSuperAdmin?: boolean
+): Promise<DeleteInterviewRoundResult> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const round = Number(roundRaw);
+  if (!Number.isInteger(round) || round < 1) {
+    throw new AppError(400, "round must be a positive integer");
+  }
+
+  const existing = await findAccessibleArchive(archiveId, caller, {
+    bidAt: true,
+    interviewHistory: true,
+  });
+
+  const history = parseInterviewHistory(existing.interviewHistory);
+  if (!history.some((r) => r.round === round)) {
+    throw new AppError(404, "Interview round not found");
+  }
+
+  const where = archiveAccessWhere(archiveId, caller);
+  const result = await prisma.$transaction(async (tx) => {
+    const row = await tx.resumeArchive.findFirst({
+      where,
+      select: {
+        id: true,
+        userId: true,
+        bidAt: true,
+        interviewHistory: true,
+      },
+    });
+    if (!row) {
+      throw new AppError(404, "Resume archive not found");
+    }
+
+    const current = parseInterviewHistory(row.interviewHistory);
+    if (!current.some((r) => r.round === round)) {
+      throw new AppError(404, "Interview round not found");
+    }
+
+    // No renumber: keep remaining round numbers; gaps are allowed.
+    const next = current.filter((r) => r.round !== round);
+    const nextInterviewRound =
+      next.length === 0 ? 1 : Math.max(...next.map((r) => r.round)) + 1;
+
+    await tx.resumeArchive.update({
+      where: { id: row.id },
+      data: {
+        interviewHistory:
+          next.length > 0 ? interviewHistoryDbValue(next) : [],
+      },
+    });
+
+    return {
+      id: row.id,
+      ownerProfileId: row.userId,
+      bidAt: row.bidAt.toISOString(),
+      interviewHistory: next,
+      nextInterviewRound,
+      deletedRound: round,
+    };
+  });
+
+  auditArchiveAccess({
+    action: "interview-round-delete",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
+    archiveId: result.id,
+    ownerProfileId: result.ownerProfileId,
+    meta: { deletedRound: result.deletedRound },
+  });
+
+  return {
+    id: result.id,
+    bidAt: result.bidAt,
+    interviewHistory: result.interviewHistory,
+    nextInterviewRound: result.nextInterviewRound,
+    deletedRound: result.deletedRound,
+  };
 }
 
 async function loadArchiveFile(
@@ -382,7 +778,105 @@ function archiveFileMeta(
 }
 
 export async function openResumeArchiveFileStream(
-  userId: string,
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  kind: "docx" | "pdf",
+  isSuperAdmin?: boolean
+): Promise<{
+  stream: NodeJS.ReadableStream;
+  fileName: string;
+  contentType: string;
+  disposition: string;
+  contentLength?: number;
+}> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const archive = await findAccessibleArchive(archiveId, caller, {
+    resumeFileName: true,
+    pdfFileName: true,
+    docxUrl: true,
+    pdfUrl: true,
+    docxStorageKey: true,
+    pdfStorageKey: true,
+  });
+
+  auditArchiveAccess({
+    action: kind === "pdf" ? "download-pdf" : "download-docx",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
+    archiveId: archive.id,
+    ownerProfileId: archive.userId,
+  });
+
+  const meta = archiveFileMeta(archive, kind);
+  const cloudUrl = kind === "docx" ? archive.docxUrl : archive.pdfUrl;
+  if (cloudUrl) {
+    const opened = await openBackblazeReadStream(cloudUrl);
+    return { ...opened, ...meta };
+  }
+
+  const storageKey = kind === "docx" ? archive.docxStorageKey : archive.pdfStorageKey;
+  if (storageKey) {
+    const { Readable } = await import("node:stream");
+    const buffer = await readUserFile(storageKey);
+    return {
+      stream: Readable.from(buffer),
+      contentLength: buffer.length,
+      ...meta,
+    };
+  }
+
+  throw new AppError(404, kind === "docx" ? "Resume archive not found" : "Resume PDF not found");
+}
+
+export async function getResumeArchiveFile(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  archiveId: string,
+  kind: "docx" | "pdf",
+  isSuperAdmin?: boolean
+): Promise<{
+  buffer: Buffer;
+  fileName: string;
+  contentType: string;
+  disposition: string;
+}> {
+  const caller = toCaller(userIdOrCaller, isSuperAdmin);
+  const archive = await findAccessibleArchive(archiveId, caller, {
+    resumeFileName: true,
+    pdfFileName: true,
+    docxUrl: true,
+    pdfUrl: true,
+    docxStorageKey: true,
+    pdfStorageKey: true,
+  });
+
+  return loadArchiveFile(archive, kind);
+}
+
+/** Public share download — anyone with the archive UUID link can download (no auth). */
+export async function getResumeArchiveFilePublic(
+  archiveId: string,
+  kind: "docx" | "pdf"
+): Promise<{
+  buffer: Buffer;
+  fileName: string;
+  contentType: string;
+  disposition: string;
+}> {
+  const archive = await prisma.resumeArchive.findFirst({
+    where: { id: archiveId },
+  });
+
+  if (!archive) {
+    throw new AppError(404, "Resume archive not found");
+  }
+
+  return loadArchiveFile(archive, kind);
+}
+
+/**
+ * Super Admin download — any user's archive (authorize via requireSuperAdmin).
+ */
+export async function openAdminResumeArchiveFileStream(
   archiveId: string,
   kind: "docx" | "pdf"
 ): Promise<{
@@ -393,7 +887,7 @@ export async function openResumeArchiveFileStream(
   contentLength?: number;
 }> {
   const archive = await prisma.resumeArchive.findFirst({
-    where: { id: archiveId, userId },
+    where: { id: archiveId },
     select: {
       resumeFileName: true,
       pdfFileName: true,
@@ -426,47 +920,8 @@ export async function openResumeArchiveFileStream(
     };
   }
 
-  throw new AppError(404, kind === "docx" ? "Resume archive not found" : "Resume PDF not found");
-}
-
-export async function getResumeArchiveFile(
-  userId: string,
-  archiveId: string,
-  kind: "docx" | "pdf"
-): Promise<{
-  buffer: Buffer;
-  fileName: string;
-  contentType: string;
-  disposition: string;
-}> {
-  const archive = await prisma.resumeArchive.findFirst({
-    where: { id: archiveId, userId },
-  });
-
-  if (!archive) {
-    throw new AppError(404, "Resume archive not found");
-  }
-
-  return loadArchiveFile(archive, kind);
-}
-
-/** Public share download — anyone with the archive UUID link can download (no auth). */
-export async function getResumeArchiveFilePublic(
-  archiveId: string,
-  kind: "docx" | "pdf"
-): Promise<{
-  buffer: Buffer;
-  fileName: string;
-  contentType: string;
-  disposition: string;
-}> {
-  const archive = await prisma.resumeArchive.findFirst({
-    where: { id: archiveId },
-  });
-
-  if (!archive) {
-    throw new AppError(404, "Resume archive not found");
-  }
-
-  return loadArchiveFile(archive, kind);
+  throw new AppError(
+    404,
+    kind === "docx" ? "Resume archive not found" : "Resume PDF not found"
+  );
 }

@@ -136,31 +136,56 @@ export function paragraphHasVisibleText(pXml: string): boolean {
   return Boolean(paragraphPlainText(pXml));
 }
 
+export type RunBoldMode = boolean | "off" | "inherit";
+
 /**
  * Preserve base run formatting (font/color/size) and toggle bold only.
  * Always use Latin <w:b/> (not only <w:bCs/>) so bold shows in PDF.
+ * Use bold:"off" to write explicit w:val="0" — needed so skill_item text does
+ * not pick up bold from adjacent skill_cat style (table cell / PDF bleed).
+ * Use bold:"inherit" to leave template rPr alone (style bold can still apply).
  */
-function cleanRPrForBold(rPr: string, bold: boolean): string {
+function cleanRPrForBold(rPr: string, bold: RunBoldMode): string {
   let props = rPr;
-  if (!props || props === "<w:rPr/>" || props === "<w:rPr></w:rPr>") {
-    return bold ? "<w:rPr><w:b/><w:bCs/></w:rPr>" : "<w:rPr/>";
+  const empty = !props || props === "<w:rPr/>" || props === "<w:rPr></w:rPr>";
+
+  if (bold === "inherit") {
+    return empty ? "" : props;
   }
+
+  if (empty) {
+    if (bold === true) return "<w:rPr><w:b/><w:bCs/></w:rPr>";
+    if (bold === "off" || bold === false) {
+      // Explicit off beats paragraph-style / neighbour-cell bold in Word + LO PDF.
+      return '<w:rPr><w:b w:val="0"/><w:bCs w:val="0"/></w:rPr>';
+    }
+    return "<w:rPr/>";
+  }
+
   props = props
     .replace(/<w:b\b[^/]*\/>/g, "")
     .replace(/<w:bCs\b[^/]*\/>/g, "")
     .replace(/<w:b\b[^>]*>[\s\S]*?<\/w:b>/g, "")
     .replace(/<w:bCs\b[^>]*>[\s\S]*?<\/w:bCs>/g, "");
-  if (bold) {
+
+  const inject =
+    bold === true
+      ? "<w:b/><w:bCs/>"
+      : bold === "off" || bold === false
+        ? '<w:b w:val="0"/><w:bCs w:val="0"/>'
+        : "";
+
+  if (inject) {
     if (/<\/w:rPr>/.test(props)) {
-      props = props.replace(/<\/w:rPr>/, "<w:b/><w:bCs/></w:rPr>");
+      props = props.replace(/<\/w:rPr>/, `${inject}</w:rPr>`);
     } else {
-      props = props.replace(/<w:rPr([^>]*)\/>/, "<w:rPr$1><w:b/><w:bCs/></w:rPr>");
+      props = props.replace(/<w:rPr([^>]*)\/>/, `<w:rPr$1>${inject}</w:rPr>`);
     }
   }
   return props;
 }
 
-function makeRun(text: string, rPr: string, bold: boolean): string {
+function makeRun(text: string, rPr: string, bold: RunBoldMode): string {
   const props = cleanRPrForBold(rPr, bold);
   const space = /^\s|\s$/.test(text) ? ' xml:space="preserve"' : "";
   return `<w:r>${props}<w:t${space}>${escapeXml(text)}</w:t></w:r>`;
@@ -223,9 +248,82 @@ export function detectColonSuffix(_sampleLine: string): string {
   return ":";
 }
 
+export function stripMarkdownBoldMarkers(text: string): string {
+  return text.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*\*/g, "");
+}
+
+/** True when Word run properties request bold (honors w:val="0" / false). */
+export function runPropertiesBold(rPr: string): boolean {
+  if (!rPr) return false;
+  const tagRe = /<w:(b|bCs)\b([^/>]*)(?:\/>|>[\s\S]*?<\/w:\1>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(rPr)) !== null) {
+    const attrs = m[2] ?? "";
+    if (/w:val=["'](?:0|false|off)["']/i.test(attrs)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Overwrite paragraph text without interpreting ** as markdown bold. */
+export function setParagraphPlain(
+  pXml: string,
+  text: string,
+  opts?: {
+    /** @deprecated use boldMode:"inherit" — keep template/style bold (skill_cat). */
+    preserveTemplateBold?: boolean;
+    /**
+     * off — force non-bold (skill_item, title, summary).
+     * inherit — do not toggle bold; template style may still bold (skill_cat).
+     * true/false — force on/off with explicit w:b.
+     */
+    boldMode?: RunBoldMode;
+  }
+): string {
+  const plain = stripMarkdownBoldMarkers(text);
+  const rPr = getFirstRunProps(pXml);
+  let bold: RunBoldMode = opts?.boldMode ?? "off";
+  if (opts?.preserveTemplateBold === true && opts?.boldMode === undefined) {
+    bold = "inherit";
+  }
+  return replaceParagraphContent(pXml, makeRun(plain, rPr, bold));
+}
+
 export function setParagraphMarkdown(pXml: string, text: string): string {
   const rPr = getFirstRunProps(pXml);
   return replaceParagraphContent(pXml, runsFromMarkdown(text, rPr));
+}
+
+/** Leading glyph used as a visual bullet in the text run (not Word numbering). */
+const TEXT_BULLET_PREFIX_RE = /^([•·▪▫‣∙○●◦◼□■–—\-*=]+)\s*/;
+
+/** Strip AI/FE accidental bullet prefixes so Word list + text glyph do not double. */
+export function stripLeadingBulletMarker(text: string): string {
+  return text.replace(TEXT_BULLET_PREFIX_RE, "").trim();
+}
+
+/**
+ * If the template paragraph stored a literal bullet in <w:t> (common when there
+ * is no w:numPr), return that prefix including a trailing space (e.g. "• ").
+ */
+export function extractTextBulletPrefix(pXml: string): string {
+  const plain = paragraphPlainText(pXml);
+  const m = plain.match(TEXT_BULLET_PREFIX_RE);
+  if (!m) return "";
+  // Normalize to "• " (or original marker + space) for consistent fill.
+  const marker = m[1].replace(/\s+/g, "");
+  return marker ? `${marker} ` : "";
+}
+
+/**
+ * Fill an experience / list paragraph while preserving Word list numbering
+ * (w:numPr inside pPr via replaceParagraphContent) and any literal text bullet.
+ */
+export function setExpSectionBulletText(pXml: string, text: string): string {
+  const cleaned = stripLeadingBulletMarker(text);
+  const prefix = extractTextBulletPrefix(pXml);
+  // numPr lives in pPr and is kept by setParagraphMarkdown / replaceParagraphContent.
+  return setParagraphMarkdown(pXml, prefix ? `${prefix}${cleaned}` : cleaned);
 }
 
 export type SkillCategoryFillMode = "tab-hanging";

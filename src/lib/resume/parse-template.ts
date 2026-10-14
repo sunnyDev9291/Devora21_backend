@@ -415,188 +415,28 @@ function findSectionHeader(
   return -1;
 }
 
-/** "Liberty Mutual Insurance | Senior Software Engineer" → company + role. */
-function parseCompanyPipeRole(text: string): { company: string; role: string } {
-  const parts = text
-    .split("|")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (parts.length >= 2) {
-    return { company: parts[0], role: parts.slice(1).join(" | ") };
-  }
-  return { company: text.trim(), role: text.trim() };
-}
-
-function collectJobStartsByStyle(
-  paragraphs: string[],
-  expStart: number,
-  expEnd: number,
-  field: "companyPeriod" | "companyName" | "companyRole"
-): number[] {
-  const starts: number[] = [];
-  for (let i = expStart; i < expEnd; i += 1) {
-    if (styleMatches(getParagraphStyle(paragraphs[i]), field)) {
-      starts.push(i);
-    }
-  }
-  return starts;
-}
-
 /**
- * Templates that style only exp_section (date + "Company | Role" left Normal).
- * Group contiguous exp_section runs; pull date/company lines from above each run.
+ * Jobs require styled company headers: company_period (match key) and/or
+ * company_info (legacy: company_name). Optional company_role / company_location /
+ * exp_section inside each block. No fallback for unstyled Normal lines.
  */
-function parseStyledJobsFromExpSections(
-  paragraphs: string[],
-  expStart: number,
-  expEnd: number
-): TemplateJobSkeleton[] {
-  const jobs: TemplateJobSkeleton[] = [];
-  let i = expStart;
-  while (i < expEnd) {
-    if (!styleMatches(getParagraphStyle(paragraphs[i]), "expSection")) {
-      i += 1;
-      continue;
-    }
-
-    const bulletStart = i;
-    while (
-      i < expEnd &&
-      styleMatches(getParagraphStyle(paragraphs[i]), "expSection")
-    ) {
-      i += 1;
-    }
-    const bulletParaIndices: number[] = [];
-    for (let p = bulletStart; p < i; p += 1) {
-      bulletParaIndices.push(p);
-    }
-    if (bulletParaIndices.length === 0) continue;
-
-    // Walk upward for unstyled header lines (skip empties).
-    const above: Array<{ idx: number; text: string }> = [];
-    for (let p = bulletStart - 1; p >= expStart && above.length < 4; p -= 1) {
-      const style = getParagraphStyle(paragraphs[p]);
-      if (styleMatches(style, "expSection")) break;
-      if (
-        styleMatches(style, "skillCat") ||
-        styleMatches(style, "skillItem") ||
-        styleMatches(style, "summary")
-      ) {
-        break;
-      }
-      const text = paragraphPlainText(paragraphs[p]);
-      if (!text) continue;
-      // Stop at section titles like "Experience" / "Education".
-      if (EXPERIENCE_HEADER_RE.test(text) || EDUCATION_HEADER_RE.test(text)) {
-        break;
-      }
-      above.push({ idx: p, text });
-    }
-
-    let dates = "";
-    let datesParaIndex = bulletParaIndices[0];
-    let company = "";
-    let role = "";
-    let companyParaIndex = bulletParaIndices[0];
-    let roleParaIndex = bulletParaIndices[0];
-    let locationParaIndex: number | undefined;
-    let blockStart = bulletParaIndices[0];
-
-    // Typical order above bullets: [dates, company|role] (closest = company line).
-    const nearest = above[0];
-    const second = above[1];
-    if (nearest && !isDatesLine(nearest.text)) {
-      const parsed = parseCompanyPipeRole(nearest.text);
-      company = parsed.company;
-      role = parsed.role;
-      companyParaIndex = nearest.idx;
-      roleParaIndex = nearest.idx;
-      blockStart = Math.min(blockStart, nearest.idx);
-      if (looksLikeLocationLine(nearest.text)) {
-        locationParaIndex = nearest.idx;
-      }
-    } else if (nearest && isDatesLine(nearest.text)) {
-      dates = nearest.text;
-      datesParaIndex = nearest.idx;
-      blockStart = Math.min(blockStart, nearest.idx);
-    }
-
-    if (second) {
-      if (isDatesLine(second.text) && !dates) {
-        dates = second.text;
-        datesParaIndex = second.idx;
-        blockStart = Math.min(blockStart, second.idx);
-      } else if (!company && !isDatesLine(second.text)) {
-        const parsed = parseCompanyPipeRole(second.text);
-        company = parsed.company;
-        role = parsed.role;
-        companyParaIndex = second.idx;
-        roleParaIndex = second.idx;
-        blockStart = Math.min(blockStart, second.idx);
-      }
-    }
-
-    // If nearest was dates and second was company (unusual order), swap handled above.
-    if (!dates && nearest && isDatesLine(nearest.text)) {
-      dates = nearest.text;
-      datesParaIndex = nearest.idx;
-    }
-
-    const bulletSamples = bulletParaIndices.map((idx) =>
-      paragraphPlainText(paragraphs[idx])
-    );
-
-    jobs.push({
-      company: company || role || "Company",
-      role: role || company || "Role",
-      dates: dates || "",
-      bulletCount: bulletParaIndices.length,
-      projectNames: [],
-      startParaIndex: blockStart,
-      endParaIndex: i,
-      companyParaIndex,
-      roleParaIndex,
-      datesParaIndex,
-      locationParaIndex,
-      bulletParaIndices,
-      bulletSamples,
-      projectBlocks: [],
-    });
-  }
-  return jobs;
-}
-
 function parseStyledJobs(
   paragraphs: string[],
   expStart: number,
   expEnd: number
 ): TemplateJobSkeleton[] {
-  let jobStarts = collectJobStartsByStyle(
-    paragraphs,
-    expStart,
-    expEnd,
-    "companyPeriod"
-  );
-  if (jobStarts.length === 0) {
-    jobStarts = collectJobStartsByStyle(
-      paragraphs,
-      expStart,
-      expEnd,
-      "companyName"
-    );
+  const jobStarts: number[] = [];
+  for (let i = expStart; i < expEnd; i += 1) {
+    if (styleMatches(getParagraphStyle(paragraphs[i]), "companyPeriod")) {
+      jobStarts.push(i);
+    }
   }
   if (jobStarts.length === 0) {
-    jobStarts = collectJobStartsByStyle(
-      paragraphs,
-      expStart,
-      expEnd,
-      "companyRole"
-    );
-  }
-
-  // Bullets styled, company headers left as Normal — still a valid Mode-1 template.
-  if (jobStarts.length === 0) {
-    return parseStyledJobsFromExpSections(paragraphs, expStart, expEnd);
+    for (let i = expStart; i < expEnd; i += 1) {
+      if (styleMatches(getParagraphStyle(paragraphs[i]), "companyInfo")) {
+        jobStarts.push(i);
+      }
+    }
   }
 
   const jobs: TemplateJobSkeleton[] = [];
@@ -621,7 +461,7 @@ function parseStyledJobs(
         dates = text;
       } else if (styleMatches(style, "companyLocation")) {
         locationParaIndex = p;
-      } else if (styleMatches(style, "companyName")) {
+      } else if (styleMatches(style, "companyInfo")) {
         companyParaIndex = p;
         company = text;
       } else if (styleMatches(style, "companyRole")) {
@@ -634,37 +474,21 @@ function parseStyledJobs(
       }
     }
 
-    // Unstyled "Company | Role" / dates inside a styled job block.
-    if (!company || !role || !dates) {
-      for (let p = start; p < end; p += 1) {
-        const style = getParagraphStyle(paragraphs[p]);
-        if (
-          styleMatches(style, "companyPeriod") ||
-          styleMatches(style, "companyName") ||
-          styleMatches(style, "companyRole") ||
-          styleMatches(style, "companyLocation") ||
-          styleMatches(style, "expSection")
-        ) {
-          continue;
-        }
-        const text = paragraphPlainText(paragraphs[p]);
-        if (!text) continue;
-        if (!dates && isDatesLine(text)) {
-          dates = text;
-          datesParaIndex = p;
-        } else if (!company && text.includes("|")) {
-          const parsed = parseCompanyPipeRole(text);
-          company = parsed.company;
-          role = parsed.role || role;
-          companyParaIndex = p;
-          roleParaIndex = p;
-        }
-      }
-    }
-
     const bulletSamples = bulletParaIndices.map((idx) =>
       paragraphPlainText(paragraphs[idx])
     );
+
+    // Legacy: company_info / company_name may hold "Company | Role".
+    if (company && !role && company.includes("|")) {
+      const parts = company
+        .split("|")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length >= 2) {
+        company = parts[0];
+        role = parts.slice(1).join(" | ");
+      }
+    }
 
     jobs.push({
       company: company || role || "Company",
@@ -764,16 +588,11 @@ function parseStyledTemplate(
       skillsHeaderIndex >= 0 ? skillsHeaderIndex + 1 : 0
     );
   }
-  // Fallback: first company period / company name / exp_section
+  // Fallback: first company period / company name
   if (experienceHeaderIndex < 0) {
     for (let i = 0; i < paragraphs.length; i += 1) {
       const style = getParagraphStyle(paragraphs[i]);
-      if (
-        styleMatches(style, "companyPeriod") ||
-        styleMatches(style, "companyName") ||
-        styleMatches(style, "companyRole") ||
-        styleMatches(style, "expSection")
-      ) {
+      if (styleMatches(style, "companyPeriod") || styleMatches(style, "companyInfo")) {
         experienceHeaderIndex = Math.max(0, i - 1);
         break;
       }

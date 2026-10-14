@@ -35,7 +35,11 @@ const strictJsonObjectSchema = z.preprocess(
 
 export const chatCompletionsSchema = z
   .object({
-    messages: z.array(chatMessageSchema).min(1, "messages is required"),
+    /**
+     * Resume mode (jsonObject:true) ignores FE messages — backend builds the prompt
+     * from stored template structure + writing prompt + JD. Q&A mode still needs them.
+     */
+    messages: z.array(chatMessageSchema).default([]),
     /** Accepted for FE compat but ignored — Sonnet always uses model max (128k). */
     maxTokens: z
       .number()
@@ -58,9 +62,21 @@ export const chatCompletionsSchema = z
     customPrompt: optionalPromptOverride,
     profilePrompt: optionalPromptOverride,
     promptContent: optionalPromptOverride,
+    /** Optional active-template override; default = user's active stored DOCX. */
+    templateId: z.string().trim().min(1).optional(),
     /** Ignored no-op kept for older clients that still send the skip flag. */
     skipEnglishTeamGate: truthyFlagSchema.optional().default(false),
     skip_english_team_gate: truthyFlagSchema.optional().default(false),
+  })
+  .superRefine((value, ctx) => {
+    // Plain Q&A still needs client messages; resume mode builds them server-side.
+    if (value.jsonObject !== true && (!value.messages || value.messages.length < 1)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "messages is required",
+        path: ["messages"],
+      });
+    }
   })
   .transform((value) => {
     const jobTitle = value.jobTitle || value.job_title || "";
@@ -77,6 +93,7 @@ export const chatCompletionsSchema = z
       customPrompt: value.customPrompt,
       profilePrompt: value.profilePrompt,
       promptContent: value.promptContent,
+      templateId: value.templateId,
       skipEnglishTeamGate,
     };
   });

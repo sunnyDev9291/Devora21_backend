@@ -4,7 +4,8 @@ import { resumeJsonOutputContract } from "./output-contract";
 
 /**
  * AI writes ONLY: title, summary, skills, experience bullets, fileName.
- * Identity / education / company headers stay in the DOCX template.
+ * Company/role/dates meta comes from the PROFILE WRITING PROMPT.
+ * DOCX company_period / company_info headers are never overwritten on render.
  */
 export function buildResumeSystemPrompt(
   layout: ResumeTemplateLayout,
@@ -12,14 +13,16 @@ export function buildResumeSystemPrompt(
 ): string {
   return [
     "You generate ONLY these resume fields: title, summary, skills, experience bullets, fileName.",
-    "Do NOT invent or change header_name, header_title, name, email, phone, LinkedIn, education,",
-    "company name, company dates, company role, or company location — those stay fixed in the DOCX template.",
+    "Do NOT invent or change header_name, header_title, name, email, phone, LinkedIn, or education — those stay in the DOCX.",
+    "Company name, role, and employment dates MUST come from the PROFILE WRITING PROMPT (work history / company meta),",
+    "NOT from sample text in the DOCX template.",
+    "On render, company_period / company_info in the DOCX stay unchanged; only experience bullets are written into slots.",
     "Skill category COUNT and bullet COUNT per job are FIXED by the template structure below.",
     "CRITICAL: For every experience, bullets.length MUST equal that job's template bullet count.",
     "Write that many NEW bullets yourself — never fewer, never more, never empty strings.",
-    "Follow the PROFILE WRITING PROMPT for wording/tone of the fields you do write.",
+    "Follow the PROFILE WRITING PROMPT for wording/tone and for which companies/roles/dates to use.",
     "",
-    "===== PROFILE WRITING PROMPT (absolute for wording) =====",
+    "===== PROFILE WRITING PROMPT (absolute for wording + company meta) =====",
     profilePrompt.trim(),
     "===== END PROFILE WRITING PROMPT =====",
     "",
@@ -66,31 +69,35 @@ export function buildResumeUserPrompt(input: {
   if (input.layout === "projects") {
     const structureLines = input.jobs.map((job, idx) => {
       const names = job.projectNames.map((n) => `"${n}"`).join(", ");
-      return `${idx + 1}. company="${job.company}" | dates="${job.dates}" | fixed project names: ${names}`;
+      return `${idx + 1}. dates="${job.dates}" | fixed project names: ${names}`;
     });
     blocks.push(
       [
-        `Frozen template jobs (${input.jobs.length}) — keep company/dates/project names:`,
+        `Template experience slots (${input.jobs.length}) — match by dates (company_period):`,
         structureLines.join("\n"),
+        "Company/role/dates CONTENT comes from the PROFILE WRITING PROMPT.",
+        `Set each experience.dates to the matching template period string (exact).`,
         `Return exactly ${input.jobs.length} experience entries (project field text only).`,
       ].join("\n")
     );
   } else {
     const structureLines = input.jobs.map((job, idx) => {
-      return `${idx + 1}. company="${job.company}" | role="${job.role}" | dates="${job.dates}" | bullets.length MUST be ${job.bulletCount}`;
+      return `${idx + 1}. dates="${job.dates}" | bullets.length MUST be ${job.bulletCount}`;
     });
     const countSummary = input.jobs
       .map((job, idx) => `exp[${idx}].bullets.length=${job.bulletCount}`)
       .join(", ");
     blocks.push(
       [
-        `Frozen template jobs (${input.jobs.length}) — company/role/dates/location stay in the DOCX:`,
+        `Template experience slots (${input.jobs.length}) — MATCH KEY is dates (company_period in the DOCX):`,
         structureLines.join("\n"),
+        "Company name / role / employment story: take from the PROFILE WRITING PROMPT, not from the template sample text.",
+        "For each slot: set experiences[i].dates to that slot's dates string EXACTLY (needed to place bullets on render).",
+        "Fill company and role from the profile prompt meta that belongs to that period.",
         `Return exactly ${input.jobs.length} experience entries.`,
         `HARD RULE: ${countSummary}.`,
         "You must AUTHOR each bullet (non-empty). Do not omit bullets or return a shorter array.",
-        "For each entry: copy company/role/dates from the frozen list; write ONLY the bullets array",
-        "with exactly the required length. Do not change company headers in the document.",
+        "Write ONLY new bullets for each slot. Do not change company_period / company_info in the document (render leaves them alone).",
       ].join("\n")
     );
   }

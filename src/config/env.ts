@@ -55,6 +55,12 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
+  /**
+   * Comma-separated emails treated as Super Admin (in addition to User.isSuperAdmin).
+   * Use to bootstrap the first admin without a DB edit.
+   */
+  SUPER_ADMIN_EMAILS: z.string().optional(),
+
   CLAUDE_API_KEY: z.string().optional(),
   /** When true, /ai chat endpoints return mocked resume content (no Claude call). */
   AI_MOCK: z
@@ -112,6 +118,22 @@ export const emailEnabled =
 
 /** When false, signup/login skip email verification. */
 export const emailVerificationRequired = env.REQUIRE_EMAIL_VERIFICATION;
+
+/** Lowercased emails from SUPER_ADMIN_EMAILS env (bootstrap allowlist). */
+export const superAdminEmails: Set<string> = new Set(
+  (env.SUPER_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+export function isSuperAdminUser(user: {
+  email: string;
+  isSuperAdmin?: boolean | null;
+}): boolean {
+  if (user.isSuperAdmin === true) return true;
+  return superAdminEmails.has(user.email.trim().toLowerCase());
+}
 
 export const aiMockEnabled = env.AI_MOCK;
 export const claudeEnabled = aiMockEnabled || Boolean(env.CLAUDE_API_KEY);

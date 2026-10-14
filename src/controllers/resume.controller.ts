@@ -3,20 +3,33 @@ import { pipeline } from "node:stream/promises";
 import multer from "multer";
 import {
   archiveResume,
+  deleteInterviewRound,
+  getInterviewHistoryForUser,
   getResumeArchiveFilePublic,
+  getResumeArchiveForUser,
+  getResumeArchiveJobDescription,
   listResumeArchives,
   openResumeArchiveFileStream,
+  recordInterviewRound,
 } from "../services/resume-archive.service";
+import type {
+  DeleteInterviewRoundBodyInput,
+  RecordInterviewRoundInput,
+} from "../validators/interview-history.validator";
 import {
   enqueueResumeFromJob,
   getResumeFromJobStatus,
 } from "../services/resume-from-job.service";
 import { renderResumeFromRequest } from "../services/resume-render.service";
-import { getResumeTemplatePdf } from "../services/resume-template.service";
+import {
+  getResumeTemplatePdf,
+  getResumeTemplateStructure,
+} from "../services/resume-template.service";
 import type { ArchiveListFilters } from "../utils/archive-filters";
 import { parseExactFlag } from "../utils/archive-filters";
 import { AppError } from "../middleware/errorHandler";
 import { AuthenticatedRequest } from "../middleware/auth";
+import { findOtherInterviewProgress } from "../services/admin-resume.service";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
 import type { ResumeRenderInput } from "../validators/resume-render.validator";
 
@@ -28,15 +41,44 @@ function parseArchiveListFilters(query: AuthenticatedRequest["query"]): ArchiveL
   const jobTitle =
     optionalQueryParam(query.jobTitle) || optionalQueryParam(query.title);
 
+  // JD filter aliases — FE lean Saved Resumes may send jd= or jobDescription=
+  const jd =
+    optionalQueryParam(query.jd) ||
+    optionalQueryParam(query.jobDescription) ||
+    optionalQueryParam(query.job_description);
+
+  // Integrated keyword aliases (same server-side field union as q)
+  const q =
+    optionalQueryParam(query.q) ||
+    optionalQueryParam(query.search) ||
+    optionalQueryParam(query.query);
+
   return {
     company: optionalQueryParam(query.company),
     jobTitle,
-    jd: optionalQueryParam(query.jd),
+    jd,
     from: optionalQueryParam(query.from),
     to: optionalQueryParam(query.to),
-    q: optionalQueryParam(query.q),
+    q,
     exact: parseExactFlag(query.exact),
   };
+}
+
+/** FE Saved Resumes: includeJobDescription=false and/or fields=lean */
+function parseLeanListFlag(query: AuthenticatedRequest["query"]): boolean {
+  const fields = optionalQueryParam(query.fields)?.toLowerCase();
+  if (fields === "lean") return true;
+
+  const raw = query.includeJobDescription;
+  if (typeof raw === "string") {
+    const v = raw.trim().toLowerCase();
+    if (v === "false" || v === "0" || v === "no") return true;
+  }
+  if (Array.isArray(raw) && typeof raw[0] === "string") {
+    const v = raw[0].trim().toLowerCase();
+    if (v === "false" || v === "0" || v === "no") return true;
+  }
+  return false;
 }
 
 function contentDisposition(type: string, fileName: string): string {
@@ -100,7 +142,31 @@ export async function downloadResumeTemplatePdfHandler(
       throw new AppError(400, "templateId is required");
     }
 
-    const pdf = await getResumeTemplatePdf({ userId, templateId });
+    let pdf: Awaited<ReturnType<typeof getResumeTemplatePdf>>;
+    try {
+      pdf = await getResumeTemplatePdf({ userId, templateId });
+    } catch (err) {
+      // Super Admin FE fallback: preview another user's template by id.
+      if (
+        err instanceof AppError &&
+        err.statusCode === 404 &&
+        req.authUser?.isSuperAdmin
+      ) {
+        const { prisma } = await import("../lib/prisma");
+        const row = await prisma.resumeTemplate.findFirst({
+          where: { id: templateId },
+          select: { userId: true },
+        });
+        if (!row) throw err;
+        pdf = await getResumeTemplatePdf({
+          userId: row.userId,
+          templateId,
+        });
+      } else {
+        throw err;
+      }
+    }
+
     const safeName = pdf.pdfFileName.replace(/["\\]/g, "_");
 
     res.setHeader("Content-Type", "application/pdf");
@@ -110,6 +176,26 @@ export async function downloadResumeTemplatePdfHandler(
     res.setHeader("ETag", `"${pdf.templateId}"`);
     res.setHeader("Content-Length", String(pdf.buffer.length));
     res.status(200).send(pdf.buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Mode-1 skeleton: company/role/dates + exact bulletCount per job from DOCX styles. */
+export async function resumeTemplateStructureHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.authUser?.id;
+    if (!userId) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const templateId = String(req.params.templateId ?? "").trim() || undefined;
+    const structure = await getResumeTemplateStructure({ userId, templateId });
+    res.status(200).json(structure);
   } catch (err) {
     next(err);
   }
@@ -207,9 +293,139 @@ export async function listResumeArchivesHandler(
       throw new AppError(401, "Authentication required");
     }
 
-    const items = await listResumeArchives(userId, parseArchiveListFilters(req.query));
+    const lean = parseLeanListFlag(req.query);
+    const items = await listResumeArchives(
+      userId,
+      parseArchiveListFilters(req.query),
+      { lean }
+    );
 
     res.status(200).json({ items });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Twin of GET /admin/resumes/other-progress for FE fallback.
+ * Super Admin only — cross-profile company interview discovery.
+ */
+export async function otherInterviewProgressHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser?.isSuperAdmin) {
+      throw new AppError(403, "Super Admin access required");
+    }
+    const result = await findOtherInterviewProgress(
+      req.query as Record<string, unknown>,
+      { adminId: req.authUser.id }
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+function archiveCaller(req: AuthenticatedRequest): {
+  userId: string;
+  isSuperAdmin: boolean;
+} {
+  const userId = req.authUser?.id;
+  if (!userId) {
+    throw new AppError(401, "Authentication required");
+  }
+  return {
+    userId,
+    isSuperAdmin: Boolean(req.authUser?.isSuperAdmin),
+  };
+}
+
+export async function getResumeArchiveJobDescriptionHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const caller = archiveCaller(req);
+    const archiveId = String(req.params.id ?? "").trim();
+    const result = await getResumeArchiveJobDescription(caller, archiveId);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getResumeArchiveHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const caller = archiveCaller(req);
+    const archiveId = String(req.params.id ?? "").trim();
+    const item = await getResumeArchiveForUser(caller, archiveId);
+    res.status(200).json(item);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getInterviewHistoryHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const caller = archiveCaller(req);
+    const archiveId = String(req.params.id ?? "").trim();
+    const result = await getInterviewHistoryForUser(caller, archiveId);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function recordInterviewRoundHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const caller = archiveCaller(req);
+    const archiveId = String(req.params.id ?? "").trim();
+    const body = req.body as RecordInterviewRoundInput;
+    const result = await recordInterviewRound(caller, archiveId, body.action);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteInterviewRoundHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const caller = archiveCaller(req);
+    const archiveId = String(req.params.id ?? "").trim();
+    const fromPath = Array.isArray(req.params.round)
+      ? req.params.round[0]
+      : req.params.round;
+    const fromBody = (req.body as DeleteInterviewRoundBodyInput | undefined)
+      ?.round;
+    const round =
+      fromPath !== undefined && String(fromPath).trim() !== ""
+        ? String(fromPath).trim()
+        : fromBody;
+    if (round === undefined || round === null || String(round).trim() === "") {
+      throw new AppError(400, "round is required");
+    }
+    const result = await deleteInterviewRound(caller, archiveId, round);
+    res.status(200).json(result);
   } catch (err) {
     next(err);
   }
@@ -221,13 +437,9 @@ export async function downloadResumeArchiveDocxHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = req.authUser?.id;
-    if (!userId) {
-      throw new AppError(401, "Authentication required");
-    }
-
+    const caller = archiveCaller(req);
     const archiveId = String(req.params.id ?? "");
-    const file = await openResumeArchiveFileStream(userId, archiveId, "docx");
+    const file = await openResumeArchiveFileStream(caller, archiveId, "docx");
 
     res.setHeader("Content-Type", file.contentType);
     res.setHeader("Content-Disposition", contentDisposition("attachment", file.fileName));
@@ -247,13 +459,9 @@ export async function downloadResumeArchivePdfHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = req.authUser?.id;
-    if (!userId) {
-      throw new AppError(401, "Authentication required");
-    }
-
+    const caller = archiveCaller(req);
     const archiveId = String(req.params.id ?? "");
-    const file = await openResumeArchiveFileStream(userId, archiveId, "pdf");
+    const file = await openResumeArchiveFileStream(caller, archiveId, "pdf");
 
     res.setHeader("Content-Type", file.contentType);
     res.setHeader("Content-Disposition", contentDisposition("inline", file.fileName));

@@ -6,6 +6,24 @@ import { logger } from "../lib/logger";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
 import { buildPublicShareUrl } from "./resume-archive.service";
 import { resolveRemoteDeviceForUser } from "./remote-device.service";
+import {
+  archiveAccessWhere,
+  auditArchiveAccess,
+  type ArchiveAccessCaller,
+} from "../lib/archive-access";
+
+function toCaller(
+  userIdOrCaller: string | ArchiveAccessCaller,
+  isSuperAdmin?: boolean
+): ArchiveAccessCaller {
+  if (typeof userIdOrCaller === "string") {
+    return { userId: userIdOrCaller, isSuperAdmin: Boolean(isSuperAdmin) };
+  }
+  return {
+    userId: userIdOrCaller.userId,
+    isSuperAdmin: Boolean(userIdOrCaller.isSuperAdmin),
+  };
+}
 
 const DELIVERY_TTL_MS = 48 * 60 * 60 * 1000;
 
@@ -178,15 +196,23 @@ function toDeliveryPublic(
 }
 
 export async function deliverArchiveHere(
-  userId: string,
+  userIdOrCaller: string | ArchiveAccessCaller,
   archiveId: string,
-  options?: { includePdf?: boolean; includeDocx?: boolean }
+  options?: {
+    includePdf?: boolean;
+    includeDocx?: boolean;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<HereDeliverResult> {
+  const caller = toCaller(userIdOrCaller, options?.isSuperAdmin);
   const includePdf = options?.includePdf !== false;
   const includeDocx = options?.includeDocx !== false;
+  if (!includePdf && !includeDocx) {
+    throw new AppError(400, "At least one of includePdf or includeDocx is required");
+  }
 
   const archive = await prisma.resumeArchive.findFirst({
-    where: { id: archiveId, userId },
+    where: archiveAccessWhere(archiveId, caller),
   });
   if (!archive) {
     throw new AppError(404, "Resume archive not found");
@@ -206,9 +232,20 @@ export async function deliverArchiveHere(
     throw new AppError(404, "No downloadable files on this archive");
   }
 
-  logger.info("remote.deliver", "here download urls issued", {
-    userId,
+  auditArchiveAccess({
+    action: "deliver-here",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
     archiveId: archive.id,
+    ownerProfileId: archive.userId,
+    meta: { includePdf, includeDocx },
+  });
+
+  logger.info("remote.deliver", "here download urls issued", {
+    userId: caller.userId,
+    archiveId: archive.id,
+    ownerProfileId: archive.userId,
+    isSuperAdmin: Boolean(caller.isSuperAdmin),
     includePdf,
     includeDocx,
     pdfUrl: Boolean(urls.pdfUrl),
@@ -225,23 +262,26 @@ export async function deliverArchiveHere(
 }
 
 export async function enqueueRemoteDelivery(
-  userId: string,
+  userIdOrCaller: string | ArchiveAccessCaller,
   archiveId: string,
   options?: {
     deviceId?: string;
     includePdf?: boolean;
     includeDocx?: boolean;
+    isSuperAdmin?: boolean;
   }
 ): Promise<RemoteDeliverResult> {
+  const caller = toCaller(userIdOrCaller, options?.isSuperAdmin);
   const includePdf = options?.includePdf !== false;
   const includeDocx = options?.includeDocx !== false;
   if (!includePdf && !includeDocx) {
     throw new AppError(400, "At least one of includePdf or includeDocx is required");
   }
 
+  // Archive may belong to another profile; remote device must belong to caller.
   const archive = await prisma.resumeArchive.findFirst({
-    where: { id: archiveId, userId },
-    select: { id: true, pdfUrl: true, docxUrl: true },
+    where: archiveAccessWhere(archiveId, caller),
+    select: { id: true, userId: true, pdfUrl: true, docxUrl: true },
   });
   if (!archive) {
     throw new AppError(404, "Resume archive not found");
@@ -253,12 +293,12 @@ export async function enqueueRemoteDelivery(
     throw new AppError(404, "DOCX not available on this archive");
   }
 
-  const device = await resolveRemoteDeviceForUser(userId, options?.deviceId);
+  const device = await resolveRemoteDeviceForUser(caller.userId, options?.deviceId);
   const expiresAt = new Date(Date.now() + DELIVERY_TTL_MS);
 
   const delivery = await prisma.resumeRemoteDelivery.create({
     data: {
-      userId,
+      userId: caller.userId,
       deviceId: device.id,
       archiveId: archive.id,
       status: "pending",
@@ -268,9 +308,25 @@ export async function enqueueRemoteDelivery(
     },
   });
 
-  logger.info("remote.deliver", "queued remote delivery", {
-    userId,
+  auditArchiveAccess({
+    action: "deliver-remote",
+    callerUserId: caller.userId,
+    isSuperAdmin: caller.isSuperAdmin,
     archiveId: archive.id,
+    ownerProfileId: archive.userId,
+    meta: {
+      deliveryId: delivery.id,
+      deviceId: device.id,
+      includePdf,
+      includeDocx,
+    },
+  });
+
+  logger.info("remote.deliver", "queued remote delivery", {
+    userId: caller.userId,
+    archiveId: archive.id,
+    ownerProfileId: archive.userId,
+    isSuperAdmin: Boolean(caller.isSuperAdmin),
     deliveryId: delivery.id,
     deviceId: device.id,
     deviceName: device.name,

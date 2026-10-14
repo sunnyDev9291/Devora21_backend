@@ -1,5 +1,5 @@
 import { AuthProvider } from "@prisma/client";
-import { emailVerificationRequired } from "../config/env";
+import { emailVerificationRequired, isSuperAdminUser } from "../config/env";
 import type { SafeUser } from "../services/auth.service";
 import type { ListingUrls } from "../lib/listing-urls";
 
@@ -12,6 +12,7 @@ export interface FrontendUser {
   avatar?: string;
   emailVerified: boolean;
   resumeBuilderEnabled: boolean;
+  isSuperAdmin: boolean;
   onboardingCompleted: boolean;
   provider: "google" | "local" | "email";
   createdAt?: string;
@@ -49,6 +50,7 @@ export function formatUserResponse(user: SafeUser): FrontendUser {
     name: buildDisplayName(user.firstName, user.lastName, user.email),
     emailVerified: emailVerificationRequired ? user.emailVerified : true,
     resumeBuilderEnabled: user.resumeBuilderEnabled,
+    isSuperAdmin: isSuperAdminUser(user),
     onboardingCompleted: user.onboardingCompleted,
     provider: mapProvider(user.provider),
     createdAt: user.createdAt.toISOString(),

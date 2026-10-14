@@ -3,7 +3,6 @@ import { claudeEnabled } from "../config/env";
 import { ALLOWED_FRONTEND_ORIGINS } from "../config/frontend";
 import { AppError } from "../middleware/errorHandler";
 import { verifyAccessToken } from "../lib/jwt";
-import { resumeJsonOutputContract } from "../lib/resume/output-contract";
 import {
   CLAUDE_MODEL,
   CLAUDE_MAX_OUTPUT_TOKENS,
@@ -14,7 +13,7 @@ import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import type { ChatCompletionsInput, ClaudeChatInput } from "../validators/ai.validator";
-import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
+import { buildResumeGeneratePrompt } from "../services/resume-generate.service";
 
 function serviceUnavailable(res: Response): void {
   res.status(503).json({ error: "Claude API is not configured" });
@@ -128,6 +127,7 @@ async function loadResumeUser(userId: string): Promise<{
   email: string;
   emailVerified: boolean;
   resumeBuilderEnabled: boolean;
+  isSuperAdmin: boolean;
   customPrompt: string | null;
 }> {
   const user = await prisma.user.findUnique({
@@ -137,6 +137,7 @@ async function loadResumeUser(userId: string): Promise<{
       email: true,
       emailVerified: true,
       resumeBuilderEnabled: true,
+      isSuperAdmin: true,
       customPrompt: true,
     },
   });
@@ -183,6 +184,7 @@ async function resolveAiUser(
         email: user.email,
         emailVerified: user.emailVerified,
         resumeBuilderEnabled: user.resumeBuilderEnabled,
+        isSuperAdmin: Boolean(user.isSuperAdmin),
       };
       return user;
     }
@@ -195,6 +197,7 @@ async function resolveAiUser(
         email: user.email,
         emailVerified: user.emailVerified,
         resumeBuilderEnabled: user.resumeBuilderEnabled,
+        isSuperAdmin: Boolean(user.isSuperAdmin),
       };
       return user;
     } catch {
@@ -216,64 +219,39 @@ async function resolveAiUser(
     email: user.email,
     emailVerified: user.emailVerified,
     resumeBuilderEnabled: user.resumeBuilderEnabled,
+    isSuperAdmin: Boolean(user.isSuperAdmin),
   };
   return user;
 }
 
 /**
- * Resume mode: writing instructions from request body (preferred) or live profile store.
- * Client/BFF system messages are stripped in resume mode.
+ * Resume mode (web + same logic as one-click generate):
+ * stored DOCX structure + profile writing prompt + JD → Claude.
+ * FE messages are ignored — FE only displays the stream and later signals render.
  */
-async function applyUserProfilePrompt(
+async function buildResumeChatInput(
   req: AuthenticatedRequest,
   body: ChatCompletionsInput
 ): Promise<ClaudeChatInput> {
-  const nonSystemMessages = body.messages.filter((m) => m.role !== "system");
   const user = await resolveAiUser(req, body);
+  const jobContext = extractJobContext(req, body);
 
-  const resolved = await resolveWritingPrompt({
+  const bundle = await buildResumeGeneratePrompt({
     userId: user.id,
+    jobTitle: jobContext.jobTitle || body.jobTitle || "",
+    jobDescription: jobContext.jobDescription || body.jobDescription || "",
+    templateId: body.templateId,
     customPrompt: body.customPrompt,
     profilePrompt: body.profilePrompt,
     promptContent: body.promptContent,
     context: "ai/chat/completions",
   });
-  const prompt = resolved.content;
-
-  // Infer layout hint from user messages if present; default bullets.
-  const userBlob = nonSystemMessages.map((m) => m.content).join("\n").toLowerCase();
-  const layout =
-    /\bprojects?\b/.test(userBlob) &&
-    /business\s*challenge|assigned\s*responsibility/.test(userBlob)
-      ? "projects"
-      : "bullets";
-
-  const systemContent = [
-    "You must return JSON with non-empty string fields: title, summary, skills.",
-    'skills must be a string (not an array). Example: "Python, React, AWS".',
-    "",
-    prompt,
-    "",
-    resumeJsonOutputContract(layout),
-  ].join("\n");
-
-  const {
-    userId: _userId,
-    jobTitle: _jobTitle,
-    jobDescription: _jobDescription,
-    skipEnglishTeamGate: _skip,
-    customPrompt: _customPrompt,
-    profilePrompt: _profilePrompt,
-    promptContent: _promptContent,
-    ...rest
-  } = body;
 
   // Ignore FE/body maxTokens caps — always use model maximum output.
   return {
-    ...rest,
+    messages: bundle.messages,
     jsonObject: true,
     maxTokens: resolveMaxTokens(body.maxTokens),
-    messages: [{ role: "system", content: systemContent }, ...nonSystemMessages],
   };
 }
 
@@ -311,7 +289,7 @@ export async function chatCompletionsHandler(
       // skipEnglishTeamGate is accepted (no-op) — never open an empty stream on gate failure.
       void body.skipEnglishTeamGate;
 
-      input = await applyUserProfilePrompt(req, {
+      input = await buildResumeChatInput(req, {
         ...body,
         ...jobContext,
       });

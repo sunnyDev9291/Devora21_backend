@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { emailVerificationRequired } from "../config/env";
+import { emailVerificationRequired, isSuperAdminUser } from "../config/env";
 import { resolveAuth, type AuthMethod } from "./auth-session";
 
 export interface AuthenticatedRequest extends Request {
@@ -8,6 +8,7 @@ export interface AuthenticatedRequest extends Request {
     email: string;
     emailVerified: boolean;
     resumeBuilderEnabled: boolean;
+    isSuperAdmin: boolean;
   };
   /** How the request was authenticated. */
   authMethod?: AuthMethod;
@@ -37,11 +38,34 @@ export async function requireAuth(
       email: user.email,
       emailVerified: user.emailVerified,
       resumeBuilderEnabled: user.resumeBuilderEnabled,
+      isSuperAdmin: isSuperAdminUser(user),
     };
     next();
   } catch {
     unauthorized(res, "Invalid or expired session");
   }
+}
+
+/** Requires authenticated Super Admin (User.isSuperAdmin or SUPER_ADMIN_EMAILS). */
+export function requireSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.authUser) {
+    unauthorized(res, "Authentication required");
+    return;
+  }
+
+  if (!req.authUser.isSuperAdmin) {
+    res.status(403).json({
+      error: "Super Admin access required",
+      message: "Super Admin access required",
+    });
+    return;
+  }
+
+  next();
 }
 
 export function requireEmailVerified(

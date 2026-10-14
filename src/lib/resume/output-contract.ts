@@ -5,9 +5,9 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
   const experienceShape =
     layout === "projects"
       ? `{
-      "company": "string",
-      "role": "string",
-      "dates": "string",
+      "company": "string — from profile prompt meta",
+      "role": "string — from profile prompt meta",
+      "dates": "string — MUST equal a template company_period slot",
       "projects": [
         {
           "name": "string",
@@ -19,9 +19,9 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
       ]
     }`
       : `{
-      "company": "string",
-      "role": "string",
-      "dates": "string",
+      "company": "string — from profile prompt meta",
+      "role": "string — from profile prompt meta",
+      "dates": "string — MUST equal a template company_period slot",
       "bullets": ["string"]
     }`;
 
@@ -37,10 +37,10 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
     `  "experiences": [ ${experienceShape} ]`,
     "}",
     "You write: title, summary, skills, fileName, and experience bullets (or project field text).",
-    "For each experience, copy company/role/dates from the frozen template jobs list;",
-    "only the bullets (or project narrative fields) are new writing.",
+    "Company/role come from the PROFILE WRITING PROMPT. dates must match template company_period strings (render match key).",
+    "Only bullets (or project narrative fields) are new writing for the DOCX; headers stay in the template.",
     layout === "bullets"
-      ? "HARD RULE: each experiences[i].bullets array length MUST equal that job's template bullet count (see frozen jobs list). Every bullet string non-empty."
+      ? "HARD RULE: each experiences[i].bullets array length MUST equal that job's template bullet count (see slots list). Every bullet string non-empty."
       : "HARD RULE: each experience's projects array must match the frozen project names/count.",
     '"skills" must be one string (newlines for category lines).',
     "Do not nest title/summary/skills under personalInfo or content.",

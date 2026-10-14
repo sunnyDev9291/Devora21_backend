@@ -7,10 +7,17 @@ import {
   downloadResumeArchivePdfHandler,
   handleUploadError,
   listResumeArchivesHandler,
+  otherInterviewProgressHandler,
+  getResumeArchiveJobDescriptionHandler,
+  getResumeArchiveHandler,
+  getInterviewHistoryHandler,
+  recordInterviewRoundHandler,
+  deleteInterviewRoundHandler,
   downloadResumeTemplatePdfHandler,
   resumeFromJobHandler,
   resumeFromJobStatusHandler,
   resumeRenderHandler,
+  resumeTemplateStructureHandler,
 } from "../controllers/resume.controller";
 import {
   ackRemoteDeliveryHandler,
@@ -24,12 +31,36 @@ import {
   setDefaultRemoteDeviceHandler,
   streamRemoteDeliveryHandler,
 } from "../controllers/resume-remote.controller";
-import { requireAuth, requireEmailVerified, requireResumeBuilder } from "../middleware/auth";
+import {
+  requireAuth,
+  requireEmailVerified,
+  requireResumeBuilder,
+  requireSuperAdmin,
+  type AuthenticatedRequest,
+} from "../middleware/auth";
+import type { Response, NextFunction } from "express";
+
+/** Resume-builder users, or Super Admin (admin template preview fallback). */
+function requireResumeBuilderOrSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (req.authUser?.isSuperAdmin) {
+    next();
+    return;
+  }
+  requireResumeBuilder(req, res, next);
+}
 import { requireRemoteDevice } from "../middleware/remote-device-auth";
 import { resumeUpload } from "../middleware/upload";
 import { validateBody } from "../middleware/validate";
 import { resumeFromJobSchema } from "../validators/resume-from-job.validator";
 import { resumeRenderSchema } from "../validators/resume-render.validator";
+import {
+  deleteInterviewRoundBodySchema,
+  recordInterviewRoundSchema,
+} from "../validators/interview-history.validator";
 import {
   ackRemoteDeliverySchema,
   createRemoteDeviceSchema,
@@ -67,8 +98,22 @@ router.post(
 router.get(
   "/templates/:templateId/pdf",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   downloadResumeTemplatePdfHandler
+);
+
+/** Authoritative parse: jobs + bulletCount from styled DOCX (not AI draft). */
+router.get(
+  "/templates/active/structure",
+  requireAuth,
+  requireResumeBuilder,
+  resumeTemplateStructureHandler
+);
+router.get(
+  "/templates/:templateId/structure",
+  requireAuth,
+  requireResumeBuilder,
+  resumeTemplateStructureHandler
 );
 
 /** Async: job URL → scrape → AI → DOCX → PDF. Returns jobId immediately. */
@@ -107,25 +152,92 @@ router.post(
 
 router.get("/archives", requireAuth, requireResumeBuilder, listResumeArchivesHandler);
 
+/** Cross-profile same-company interview progress (Super Admin). Static before :id. */
+router.get(
+  "/archives/other-progress",
+  requireAuth,
+  requireSuperAdmin,
+  otherInterviewProgressHandler
+);
+router.get(
+  "/archives/peer-progress",
+  requireAuth,
+  requireSuperAdmin,
+  otherInterviewProgressHandler
+);
+
+router.get(
+  "/archives/:id/job-description",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  getResumeArchiveJobDescriptionHandler
+);
+router.get(
+  "/archives/:id/jd",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  getResumeArchiveJobDescriptionHandler
+);
+
 router.get(
   "/archives/:id/docx",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   downloadResumeArchiveDocxHandler
 );
 
 router.get(
   "/archives/:id/pdf",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   downloadResumeArchivePdfHandler
+);
+
+router.get(
+  "/archives/:id/interview-history",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  getInterviewHistoryHandler
+);
+
+router.post(
+  "/archives/:id/interview-rounds",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  validateBody(recordInterviewRoundSchema),
+  recordInterviewRoundHandler
+);
+
+/** Path form used by FE: DELETE …/interview-rounds/:round */
+router.delete(
+  "/archives/:id/interview-rounds/:round",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  deleteInterviewRoundHandler
+);
+
+/** Optional body alias: DELETE …/interview-rounds { "round": N } */
+router.delete(
+  "/archives/:id/interview-rounds",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  validateBody(deleteInterviewRoundBodySchema),
+  deleteInterviewRoundHandler
+);
+
+/** Full archive item (FE last-resort JD fallback). Keep after static :id/* paths. */
+router.get(
+  "/archives/:id",
+  requireAuth,
+  requireResumeBuilderOrSuperAdmin,
+  getResumeArchiveHandler
 );
 
 /** Here vs remote deliver for an archived resume. */
 router.post(
   "/archives/:id/deliver",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   validateBody(deliverArchiveSchema),
   deliverArchiveHandler
 );
@@ -133,21 +245,21 @@ router.post(
 router.get(
   "/remote-deliveries",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   listRemoteDeliveriesHandler
 );
 
 router.get(
   "/remote-deliveries/:id/stream",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   streamRemoteDeliveryHandler
 );
 
 router.get(
   "/remote-deliveries/:id",
   requireAuth,
-  requireResumeBuilder,
+  requireResumeBuilderOrSuperAdmin,
   getRemoteDeliveryHandler
 );
 

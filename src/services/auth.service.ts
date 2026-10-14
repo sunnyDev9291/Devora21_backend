@@ -45,6 +45,7 @@ export interface SafeUser {
   provider: AuthProvider;
   emailVerified: boolean;
   resumeBuilderEnabled: boolean;
+  isSuperAdmin: boolean;
   onboardingCompleted: boolean;
   resumeTemplateId: string | null;
   resumeTemplateKey: string | null;
@@ -66,6 +67,7 @@ export function toSafeUser(user: {
   provider: AuthProvider;
   emailVerified: boolean;
   resumeBuilderEnabled?: boolean;
+  isSuperAdmin?: boolean;
   onboardingCompleted?: boolean;
   resumeTemplateId?: string | null;
   resumeTemplateKey?: string | null;
@@ -87,6 +89,7 @@ export function toSafeUser(user: {
     provider: user.provider,
     emailVerified: user.emailVerified,
     resumeBuilderEnabled: user.resumeBuilderEnabled ?? false,
+    isSuperAdmin: user.isSuperAdmin ?? false,
     onboardingCompleted: user.onboardingCompleted ?? false,
     resumeTemplateId: user.resumeTemplateId ?? null,
     resumeTemplateKey: user.resumeTemplateKey ?? null,

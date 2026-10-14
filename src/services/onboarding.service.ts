@@ -35,7 +35,11 @@ export interface ProfileMultipartInput {
   firstName?: string;
   lastName?: string;
   customPrompt?: string;
+  /** Optional display name when saving prompt text (admin textarea). */
+  promptFileName?: string;
   onboardingCompleted?: boolean;
+  /** Admin-only: toggle resume builder access. Ignored by self-serve profile parse. */
+  resumeBuilderEnabled?: boolean;
   /** Patch of listing URLs; omit to leave unchanged. Empty string clears a platform. */
   listingUrls?: ListingUrls;
   files: {
@@ -95,6 +99,13 @@ export function parseProfileBody(
 
   if (typeof source.customPrompt === "string") {
     input.customPrompt = source.customPrompt;
+  } else if (typeof source.promptContent === "string") {
+    // Alias used by admin + some FE forms.
+    input.customPrompt = source.promptContent;
+  }
+
+  if (typeof source.promptFileName === "string" && source.promptFileName.trim()) {
+    input.promptFileName = source.promptFileName.trim().slice(0, 200);
   }
 
   if (source.onboardingCompleted === "true" || source.onboardingCompleted === true) {
@@ -106,6 +117,28 @@ export function parseProfileBody(
     input.listingUrls = listingUrls;
   }
 
+  return input;
+}
+
+/** Admin PATCH body — same as profile, plus resumeBuilderEnabled. */
+export function parseAdminProfileBody(
+  body: Record<string, unknown> | undefined | null
+): Omit<ProfileMultipartInput, "files"> {
+  const input = parseProfileBody(body);
+  const source = body ?? {};
+  if (source.resumeBuilderEnabled !== undefined) {
+    const raw = source.resumeBuilderEnabled;
+    if (raw === true || raw === "true") {
+      input.resumeBuilderEnabled = true;
+    } else if (raw === false || raw === "false") {
+      input.resumeBuilderEnabled = false;
+    } else {
+      throw fieldError(
+        "resumeBuilderEnabled",
+        'resumeBuilderEnabled must be "true" or "false"'
+      );
+    }
+  }
   return input;
 }
 
@@ -176,6 +209,23 @@ async function applyProfileFiles(
     updates.customPrompt = customPrompt;
   }
 
+  // Textarea save without a file: allow renaming the prompt display name.
+  if (
+    input.promptFileName &&
+    !input.files.promptFile &&
+    updates.promptFileName === undefined
+  ) {
+    updates.promptFileName = input.promptFileName;
+  } else if (
+    updates.customPrompt !== undefined &&
+    updates.customPrompt !== null &&
+    updates.promptFileName === undefined &&
+    !input.files.promptFile &&
+    !existing.promptFileKey
+  ) {
+    updates.promptFileName = input.promptFileName ?? "prompt.txt";
+  }
+
   return updates;
 }
 
@@ -237,8 +287,10 @@ export async function updateUserProfile(
     input.firstName !== undefined ||
     input.lastName !== undefined ||
     input.customPrompt !== undefined ||
+    input.promptFileName !== undefined ||
     input.onboardingCompleted === true ||
-    input.listingUrls !== undefined;
+    input.listingUrls !== undefined ||
+    input.resumeBuilderEnabled !== undefined;
 
   const hasFileUpdate =
     Boolean(input.files.avatar) ||
@@ -277,6 +329,9 @@ export async function updateUserProfile(
       ...(input.lastName !== undefined ? { lastName: input.lastName.trim() } : {}),
       ...fileUpdates,
       ...(shouldCompleteOnboarding ? { onboardingCompleted: true } : {}),
+      ...(input.resumeBuilderEnabled !== undefined
+        ? { resumeBuilderEnabled: input.resumeBuilderEnabled }
+        : {}),
       ...(listingUrls !== undefined
         ? { listingUrls: listingUrlsDbValue(listingUrls) }
         : {}),
@@ -352,6 +407,9 @@ export async function getUserResumeTemplate(userId: string): Promise<{
   templateId: string;
   fileName: string;
   templateBase64: string;
+  structure: Awaited<
+    ReturnType<typeof import("./resume-template.service").getResumeTemplateStructure>
+  >;
 }> {
   const templateId = await ensureUserResumeTemplateId(userId);
   const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -360,11 +418,14 @@ export async function getUserResumeTemplate(userId: string): Promise<{
   }
 
   const buffer = await readUserFile(user.resumeTemplateKey);
+  const { getResumeTemplateStructure } = await import("./resume-template.service");
+  const structure = await getResumeTemplateStructure({ userId, templateId });
 
   return {
     templateId,
     fileName: user.resumeTemplateFileName,
     templateBase64: buffer.toString("base64"),
+    structure,
   };
 }
 

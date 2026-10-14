@@ -102,14 +102,16 @@ export async function deliverArchiveHandler(
   try {
     const userId = req.authUser?.id;
     if (!userId) throw new AppError(401, "Authentication required");
+    const isSuperAdmin = Boolean(req.authUser?.isSuperAdmin);
 
     const archiveId = String(req.params.id ?? "").trim();
     if (!archiveId) throw new AppError(400, "archive id is required");
 
     const body = req.body as DeliverArchiveInput;
+    const caller = { userId, isSuperAdmin };
     if (body.mode === "here") {
       const result = await remoteDeliveryService.deliverArchiveHere(
-        userId,
+        caller,
         archiveId,
         {
           includePdf: body.includePdf,
@@ -121,7 +123,7 @@ export async function deliverArchiveHandler(
     }
 
     const result = await remoteDeliveryService.enqueueRemoteDelivery(
-      userId,
+      caller,
       archiveId,
       {
         deviceId: body.deviceId,

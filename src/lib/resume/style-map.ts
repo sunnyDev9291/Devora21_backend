@@ -23,7 +23,8 @@ export const STYLE_ALIASES = {
   skillItem: ["skillitem"],
   companyPeriod: ["companyperiod"],
   companyLocation: ["companylocation"],
-  companyName: ["companyname"],
+  /** Header line(s): company name, role, or other info. company_name kept as legacy alias. */
+  companyInfo: ["companyinfo", "companyname"],
   companyRole: ["companyrole"],
   expSection: ["expsection"],
   degree: ["degree"],
@@ -53,7 +54,7 @@ export function looksLikeStyledTemplate(styleIds: string[]): boolean {
     "skillItem",
     "expSection",
     "companyPeriod",
-    "companyName",
+    "companyInfo",
     "companyRole",
     "name",
     "headerName",

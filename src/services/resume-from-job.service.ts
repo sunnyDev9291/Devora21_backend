@@ -1,14 +1,11 @@
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
-import { parseResumeTemplate } from "../lib/resume/parse-template";
-import { buildResumeSystemPrompt, buildResumeUserPrompt } from "../lib/resume/prompt";
 import { createChatCompletion, CLAUDE_MAX_OUTPUT_TOKENS } from "./claude.service";
-import { loadResumeTemplateForUser } from "./resume-template.service";
+import { buildResumeGeneratePrompt } from "./resume-generate.service";
 import { renderResume } from "./resume-render.service";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
 import { scrapeJobFromUrl } from "./zyte.service";
-import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
 import type { ResumeFromJobInput } from "../validators/resume-from-job.validator";
 
 export type ResumeFromJobStatus =
@@ -158,16 +155,6 @@ async function setJobStatus(
   });
 }
 
-async function loadProfileName(userId: string): Promise<string> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { firstName: true, lastName: true, email: true },
-  });
-  const name = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
-  if (name) return name;
-  return user?.email?.split("@")[0] || "Candidate";
-}
-
 async function runResumeFromJobPipeline(
   jobId: string,
   userId: string,
@@ -211,30 +198,23 @@ async function runResumeFromJobPipeline(
         : `Scraped ${companyName} — ${jobTitle}; loading profile…`,
     });
 
-    let storedTemplate;
-    try {
-      storedTemplate = await loadResumeTemplateForUser({ userId });
-    } catch (err) {
-      if (err instanceof AppError && err.statusCode === 404) {
-        throw new AppError(422, "Resume template not found. Upload a template in your profile.");
-      }
-      throw err;
-    }
-
-    // Prefer request-body prompt; else live profile store (cache invalidated on upload).
-    const resolved = await resolveWritingPrompt({
+    // Same generate prompt as web UI: template structure + writing prompt + JD.
+    const bundle = await buildResumeGeneratePrompt({
       userId,
+      jobTitle,
+      jobDescription,
       customPrompt: promptOverrides?.customPrompt,
       profilePrompt: promptOverrides?.profilePrompt,
       promptContent: promptOverrides?.promptContent,
       context: "resume/from-job",
     });
-    const customPrompt = resolved.content;
-
+    const {
+      storedTemplate,
+      parsedTemplate,
+      writingPrompt: customPrompt,
+      profileName,
+    } = bundle;
     const templateBuffer = storedTemplate.buffer;
-    const parsedTemplate = parseResumeTemplate(templateBuffer);
-    const profileName =
-      parsedTemplate.profileName?.trim() || (await loadProfileName(userId));
 
     await setJobStatus(jobId, "generating", {
       jobTitle,
@@ -242,22 +222,8 @@ async function runResumeFromJobPipeline(
       message: `Calling Claude (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
     });
 
-    // Only the resolved profile/request prompt instructs the model. Job + template are data only.
-    const system = buildResumeSystemPrompt(parsedTemplate.layout, customPrompt);
-    const user = buildResumeUserPrompt({
-      jobTitle,
-      jobDescription,
-      customPrompt,
-      layout: parsedTemplate.layout,
-      jobs: parsedTemplate.jobs,
-      skillsSample: parsedTemplate.skillsSample,
-    });
-
     const ai = await createChatCompletion({
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
+      messages: bundle.messages,
       maxTokens: CLAUDE_MAX_OUTPUT_TOKENS,
       jsonObject: true,
     });
@@ -311,6 +277,7 @@ async function runResumeFromJobPipeline(
       customPrompt,
       profileName,
       includePdfBase64: false,
+      generationMethod: "one_click_api",
     });
 
     await setJobStatus(jobId, "done", {

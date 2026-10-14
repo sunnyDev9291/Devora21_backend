@@ -12,6 +12,7 @@ import {
 } from "./skills-style";
 import { resolveResumeFileName } from "./filename";
 import { normalizeResumeAiJson } from "./normalize-ai-json";
+import { stripMarkdownBoldMarkers } from "./xml-utils";
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
@@ -89,18 +90,61 @@ export function fitBulletsToTemplateJob(
   return fitted;
 }
 
+/** Normalize company_period / experience.dates for slot matching. */
+export function normalizePeriodKey(dates: string): string {
+  return String(dates ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/\./g, "");
+}
+
 /**
- * Mode 1: company/role/dates frozen from template. AI supplies bullets only
- * (and project field text for projects layout).
- * Bullet counts: AI preferred; template pad/clip if the model errs.
+ * Match AI experience to a template job by company_period (dates).
+ * Falls back to first unused AI entry if period miss (keeps render working).
+ */
+function findAiExperienceForJob(
+  aiExps: ResumeExperience[],
+  job: TemplateJobSkeleton,
+  jobIndex: number,
+  used: Set<number>
+): ResumeExperience | undefined {
+  const key = normalizePeriodKey(job.dates);
+  if (key) {
+    for (let i = 0; i < aiExps.length; i += 1) {
+      if (used.has(i)) continue;
+      if (normalizePeriodKey(aiExps[i].dates) === key) {
+        used.add(i);
+        return aiExps[i];
+      }
+    }
+  }
+  for (let i = 0; i < aiExps.length; i += 1) {
+    if (used.has(i)) continue;
+    used.add(i);
+    console.warn(
+      `[resume] period match miss for slot[${jobIndex}] dates="${job.dates}"; fallback AI exp[${i}] dates="${aiExps[i].dates}"`
+    );
+    return aiExps[i];
+  }
+  return undefined;
+}
+
+/**
+ * Mode 1: match AI experiences to template slots by company_period (dates).
+ * Only bullets (or project field text) are taken for DOCX fill.
+ * company_info / company_period in the DOCX are never overwritten.
+ * Company/role in the returned JSON prefer AI (profile-prompt meta).
  */
 export function mergeWithTemplateSkeleton(
   ai: GeneratedResumeContent,
   jobs: TemplateJobSkeleton[],
   layout: ResumeTemplateLayout
 ): GeneratedResumeContent {
+  const used = new Set<number>();
   const experiences: ResumeExperience[] = jobs.map((job, i) => {
-    const src = ai.experiences[i];
+    const src = findAiExperienceForJob(ai.experiences ?? [], job, i, used);
     if (layout === "projects") {
       const aiProjects = src?.projects ?? [];
       const projects: ResumeProject[] = job.projectNames.map((name, pi) => {
@@ -114,8 +158,8 @@ export function mergeWithTemplateSkeleton(
         };
       });
       return {
-        company: job.company,
-        role: job.role,
+        company: src?.company?.trim() || job.company,
+        role: src?.role?.trim() || job.role,
         dates: job.dates,
         bullets: [],
         projects,
@@ -125,13 +169,14 @@ export function mergeWithTemplateSkeleton(
     const fromAi = [...(src?.bullets ?? [])].map((b) => b.trim());
     if (fromAi.length !== job.bulletCount) {
       console.warn(
-        `[resume] exp[${i}] "${job.company}": AI wrote ${fromAi.length} bullet(s); template needs ${job.bulletCount} — pad/clip from template`
+        `[resume] exp[${i}] period="${job.dates}": AI wrote ${fromAi.length} bullet(s); template needs ${job.bulletCount} — pad/clip from template`
       );
     }
 
     return {
-      company: job.company,
-      role: job.role,
+      company: src?.company?.trim() || job.company,
+      role: src?.role?.trim() || job.role,
+      // Canonical template period so re-render matching stays stable.
       dates: job.dates,
       bullets: fitBulletsToTemplateJob(src?.bullets, job),
     };
@@ -180,21 +225,20 @@ export function applyContentPostProcess(
   next.skills = fitSkillsToTemplateSlotCount(next.skills, opts.skillsSample);
 
   const skillTerms = collectSkillTermsFromSkillsBlock(next.skills);
-  next.summary = boldSkillTermsWholeToken(next.summary, skillTerms);
-  next.title = boldSkillTermsWholeToken(next.title, skillTerms);
-  // Do NOT markdown-bold the skills block — Franco values are regular weight;
-  // only the category label is bolded in DOCX XML.
-  next.skills = next.skills.replace(/\*\*/g, "");
+  // Keyword bold (**term**) only in experience bullet sentences at render time.
+  next.summary = stripMarkdownBoldMarkers(next.summary);
+  next.title = stripMarkdownBoldMarkers(next.title);
+  next.skills = stripMarkdownBoldMarkers(next.skills);
   next.experiences = next.experiences.map((exp) => ({
     ...exp,
-    role: boldSkillTermsWholeToken(exp.role, skillTerms),
+    role: stripMarkdownBoldMarkers(exp.role),
     bullets: exp.bullets.map((b) => boldSkillTermsWholeToken(b, skillTerms)),
     projects: exp.projects?.map((p) => ({
       ...p,
-      businessChallenge: boldSkillTermsWholeToken(p.businessChallenge, skillTerms),
-      assignedResponsibility: boldSkillTermsWholeToken(p.assignedResponsibility, skillTerms),
-      action: boldSkillTermsWholeToken(p.action, skillTerms),
-      result: boldSkillTermsWholeToken(p.result, skillTerms),
+      businessChallenge: stripMarkdownBoldMarkers(p.businessChallenge),
+      assignedResponsibility: stripMarkdownBoldMarkers(p.assignedResponsibility),
+      action: stripMarkdownBoldMarkers(p.action),
+      result: stripMarkdownBoldMarkers(p.result),
     })),
   }));
 

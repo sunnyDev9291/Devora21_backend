@@ -74,8 +74,8 @@ function resolveSofficeBinary(): string {
   }
 
   throw new AppError(
-    422,
-    "PDF conversion failed. Ensure LibreOffice is installed on the server."
+    501,
+    "PDF conversion not configured. Ensure LibreOffice is installed on the server."
   );
 }
 

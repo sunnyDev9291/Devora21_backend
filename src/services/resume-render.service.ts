@@ -179,6 +179,8 @@ export async function renderResume(
     /** Re-render into an existing archive id. */
     resumeId?: string | null;
     includePdfBase64?: boolean;
+    /** Defaults to web_ui; from-job passes one_click_api. */
+    generationMethod?: "web_ui" | "one_click_api";
   }
 ): Promise<RenderResumeResult> {
   const started = Date.now();
@@ -249,6 +251,7 @@ export async function renderResume(
           fileBuffer: docxBuffer,
           archiveId: input.resumeId?.trim() || undefined,
           templateId: template.templateId,
+          generationMethod: input.generationMethod ?? "web_ui",
         });
       } catch (err) {
         if (err instanceof AppError) throw err;

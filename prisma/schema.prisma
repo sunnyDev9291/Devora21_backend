@@ -25,6 +25,8 @@ model User {
   providerId    String?
   emailVerified Boolean      @default(false)
   resumeBuilderEnabled Boolean @default(false)
+  /** Super Admin console — required for /admin/* APIs. */
+  isSuperAdmin Boolean @default(false)
   onboardingCompleted Boolean @default(false)
   /** Active stored resume template id (`tpl_…`). */
   resumeTemplateId       String?
@@ -107,13 +109,27 @@ model ResumeArchive {
   docxUrl        String?  @db.Text
   /** Backblaze PDF download URL. */
   pdfUrl         String?  @db.Text
+  /**
+   * How the resume was generated.
+   * web_ui = POST /resume/render or /resume/archive
+   * one_click_api = POST /resume/from-job pipeline
+   */
+  generationMethod String @default("web_ui")
+  /**
+   * Interview rounds recorded on intentional Round-N downloads.
+   * JSON array: [{ "round": 1, "downloadedAt": "ISO-8601" }, ...]
+   * "Other" downloads do not append here.
+   */
+  interviewHistory Json? @map("interview_history")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now()) @updatedAt
 
   user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries ResumeRemoteDelivery[]
 
+  @@index([bidAt(sort: Desc)])
   @@index([userId, bidAt(sort: Desc)])
+  @@index([generationMethod, bidAt(sort: Desc)])
   @@index([userId, companyName])
   @@index([userId, jobTitle])
   @@index([templateId])

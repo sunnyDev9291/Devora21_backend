@@ -3,6 +3,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import passport from "./config/passport";
 import authRoutes from "./routes/auth.routes";
+import adminRoutes from "./routes/admin.routes";
 import resumeRoutes from "./routes/resume.routes";
 import aiRoutes from "./routes/ai.routes";
 import jobRoutes from "./routes/job.routes";
@@ -64,6 +65,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/auth", authRoutes);
+app.use("/admin", adminRoutes);
 app.use("/resume", resumeRoutes);
 app.use("/ai", aiRoutes);
 app.use("/jobs", jobRoutes);

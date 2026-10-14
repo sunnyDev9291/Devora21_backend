@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { env, isProduction } from "../config/env";
+import { env, isProduction, isSuperAdminUser } from "../config/env";
 import { resolveAuth } from "./auth-session";
 import type { AuthenticatedRequest } from "./auth";
 
@@ -36,6 +36,7 @@ export async function requireAiAuth(
         email: user.email,
         emailVerified: user.emailVerified,
         resumeBuilderEnabled: user.resumeBuilderEnabled,
+        isSuperAdmin: isSuperAdminUser(user),
       };
       next();
       return;

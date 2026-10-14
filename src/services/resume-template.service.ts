@@ -4,6 +4,8 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
+import { parseResumeTemplate } from "../lib/resume/parse-template";
+import type { ResumeTemplateLayout } from "../lib/resume/types";
 import { toPdfDisplayName } from "../utils/sanitize";
 import { convertDocxBufferToPdf } from "./resume-convert.service";
 import {
@@ -12,6 +14,24 @@ import {
   resolveStoragePath,
   saveUserFile,
 } from "./profile-storage.service";
+
+export type ResumeTemplateStructure = {
+  templateId: string;
+  fileName: string;
+  mode: "styled" | "legacy";
+  layout: ResumeTemplateLayout;
+  profileName: string;
+  headerTitle: string;
+  skillsSample: string;
+  jobs: Array<{
+    company: string;
+    role: string;
+    dates: string;
+    bulletCount: number;
+    /** Template bullet texts (slot order) — FE should show this count, not AI draft length. */
+    bulletSamples: string[];
+  }>;
+};
 
 export type StoredResumeTemplate = {
   templateId: string;
@@ -310,6 +330,35 @@ export async function loadResumeTemplateForUser(input: {
     buffer,
     contentHash: row.contentHash,
     updatedAt: row.updatedAt,
+  };
+}
+
+/** Authoritative Mode-1 skeleton: job headers + exact bullet slot counts from DOCX styles. */
+export async function getResumeTemplateStructure(input: {
+  userId: string;
+  templateId?: string | null;
+}): Promise<ResumeTemplateStructure> {
+  const stored = await loadResumeTemplateForUser({
+    userId: input.userId,
+    templateId: input.templateId,
+    requireActive: true,
+  });
+  const parsed = parseResumeTemplate(stored.buffer);
+  return {
+    templateId: stored.templateId,
+    fileName: stored.fileName,
+    mode: parsed.mode,
+    layout: parsed.layout,
+    profileName: parsed.profileName,
+    headerTitle: parsed.headerTitle,
+    skillsSample: parsed.skillsSample,
+    jobs: parsed.jobs.map((j) => ({
+      company: j.company,
+      role: j.role,
+      dates: j.dates,
+      bulletCount: j.bulletCount,
+      bulletSamples: j.bulletSamples ?? [],
+    })),
   };
 }
 
