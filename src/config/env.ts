@@ -62,6 +62,13 @@ const envSchema = z.object({
   SUPER_ADMIN_EMAILS: z.string().optional(),
 
   CLAUDE_API_KEY: z.string().optional(),
+  /**
+   * Default Anthropic model when the client omits `model`.
+   * Must be on the server allowlist (see lib/claude-models.ts).
+   */
+  RESUME_AI_MODEL: z.string().optional(),
+  /** Alias for RESUME_AI_MODEL. */
+  CLAUDE_DEFAULT_MODEL: z.string().optional(),
   /** When true, /ai chat endpoints return mocked resume content (no Claude call). */
   AI_MOCK: z
     .enum(["true", "false"])

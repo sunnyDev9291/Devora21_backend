@@ -1,10 +1,10 @@
 import { Response, NextFunction } from "express";
 import { claudeEnabled } from "../config/env";
 import { ALLOWED_FRONTEND_ORIGINS } from "../config/frontend";
+import { listClaudeModelsResponse, resolveClaudeModel } from "../lib/claude-models";
 import { AppError } from "../middleware/errorHandler";
 import { verifyAccessToken } from "../lib/jwt";
 import {
-  CLAUDE_MODEL,
   CLAUDE_MAX_OUTPUT_TOKENS,
   streamChatCompletion,
 } from "../services/claude.service";
@@ -19,7 +19,7 @@ function serviceUnavailable(res: Response): void {
   res.status(503).json({ error: "Claude API is not configured" });
 }
 
-/** No artificial app caps — always the Sonnet 5.5 output ceiling. */
+/** No artificial app caps — always the model output ceiling. */
 function resolveMaxTokens(_requested?: number): number {
   void _requested;
   return CLAUDE_MAX_OUTPUT_TOKENS;
@@ -43,7 +43,11 @@ function applyStreamCors(req: AuthenticatedRequest, res: Response): void {
   }
 }
 
-function startPlainTextStream(req: AuthenticatedRequest, res: Response): void {
+function startPlainTextStream(
+  req: AuthenticatedRequest,
+  res: Response,
+  modelId: string
+): void {
   applyStreamCors(req, res);
   res.status(200);
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -51,7 +55,7 @@ function startPlainTextStream(req: AuthenticatedRequest, res: Response): void {
   res.setHeader("Connection", "keep-alive");
   // Disable nginx / compatible proxy response buffering so chunks reach the browser.
   res.setHeader("X-Accel-Buffering", "no");
-  res.setHeader("X-Model", CLAUDE_MODEL);
+  res.setHeader("X-Model", modelId);
   // Avoid Content-Length so Transfer-Encoding: chunked is used.
   res.removeHeader("Content-Length");
   try {
@@ -114,11 +118,15 @@ function extractJobContext(
 }
 
 /** Plain Application Q&A keeps the frontend-provided system/history messages. */
-function buildPlainChatInput(body: ChatCompletionsInput): ClaudeChatInput {
+function buildPlainChatInput(
+  body: ChatCompletionsInput,
+  model: string
+): ClaudeChatInput {
   return {
     messages: body.messages,
     maxTokens: resolveMaxTokens(body.maxTokens),
     jsonObject: false,
+    model,
   };
 }
 
@@ -231,7 +239,8 @@ async function resolveAiUser(
  */
 async function buildResumeChatInput(
   req: AuthenticatedRequest,
-  body: ChatCompletionsInput
+  body: ChatCompletionsInput,
+  model: string
 ): Promise<ClaudeChatInput> {
   const user = await resolveAiUser(req, body);
   const jobContext = extractJobContext(req, body);
@@ -252,7 +261,16 @@ async function buildResumeChatInput(
     messages: bundle.messages,
     jsonObject: true,
     maxTokens: resolveMaxTokens(body.maxTokens),
+    model,
   };
+}
+
+/** Authenticated catalog for the FE Claude model dropdown. */
+export function listClaudeModelsHandler(
+  _req: AuthenticatedRequest,
+  res: Response
+): void {
+  res.status(200).json(listClaudeModelsResponse());
 }
 
 /**
@@ -272,11 +290,13 @@ export async function chatCompletionsHandler(
   const body = req.body as ChatCompletionsInput;
   const startedAt = Date.now();
   let input: ClaudeChatInput;
+  let modelId: string;
   let bytesStreamed = 0;
   let firstByteAt: number | null = null;
   let endReason = "ok";
 
   try {
+    modelId = resolveClaudeModel(body.model);
     // Only literal JSON boolean true means resume generation.
     if (body.jsonObject === true) {
       const jobContext = extractJobContext(req, body);
@@ -289,13 +309,17 @@ export async function chatCompletionsHandler(
       // skipEnglishTeamGate is accepted (no-op) — never open an empty stream on gate failure.
       void body.skipEnglishTeamGate;
 
-      input = await buildResumeChatInput(req, {
-        ...body,
-        ...jobContext,
-      });
+      input = await buildResumeChatInput(
+        req,
+        {
+          ...body,
+          ...jobContext,
+        },
+        modelId
+      );
     } else {
       // Application Q&A is ordinary chat: no resume gate/profile prompt override.
-      input = buildPlainChatInput(body);
+      input = buildPlainChatInput(body, modelId);
     }
   } catch (err) {
     next(err);
@@ -311,17 +335,18 @@ export async function chatCompletionsHandler(
     ),
     jsonObject: input.jsonObject,
     maxTokens: input.maxTokens,
+    model: modelId,
   });
 
   try {
     await streamChatCompletion(input, {
       onUpstreamReady: () => {
         // Open client stream only after Anthropic accepts — connect errors stay JSON.
-        startPlainTextStream(req, res);
+        startPlainTextStream(req, res, modelId);
       },
       onText: (text) => {
         if (!res.headersSent) {
-          startPlainTextStream(req, res);
+          startPlainTextStream(req, res, modelId);
         }
         if (firstByteAt === null) {
           firstByteAt = Date.now();
@@ -329,6 +354,7 @@ export async function chatCompletionsHandler(
             ttfbMs: firstByteAt - startedAt,
             authMode: mode,
             maxTokens: input.maxTokens,
+            model: modelId,
           });
         }
         bytesStreamed += Buffer.byteLength(text, "utf8");
@@ -338,7 +364,7 @@ export async function chatCompletionsHandler(
     endReason = bytesStreamed > 0 ? "complete" : "empty";
     if (!res.headersSent) {
       // Upstream OK but zero text — still close a plain stream cleanly.
-      startPlainTextStream(req, res);
+      startPlainTextStream(req, res, modelId);
     }
     res.end();
   } catch (err) {
@@ -366,6 +392,7 @@ export async function chatCompletionsHandler(
       userIdPresent: Boolean(req.authUser?.id),
       jsonObject: input.jsonObject,
       maxTokens: input.maxTokens,
+      model: modelId,
       ttfbMs: firstByteAt !== null ? firstByteAt - startedAt : null,
       bytesStreamed,
       totalMs: Date.now() - startedAt,

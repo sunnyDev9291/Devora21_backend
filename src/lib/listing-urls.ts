@@ -3,6 +3,7 @@ import { AppError } from "../middleware/errorHandler";
 import { isValidGetOnBoardCountry, resolveGetOnBoardCountryCode } from "./job-discovery/getonboard";
 import { isValidHimalayasCountry } from "./job-discovery/himalayas";
 import { isValidJobicyCountry } from "./job-discovery/jobicy";
+import { isValidJobgetherCountry } from "./job-discovery/jobgether";
 
 export const LISTING_URL_PLATFORMS = [
   "builtin",
@@ -12,6 +13,7 @@ export const LISTING_URL_PLATFORMS = [
   "himalayas",
   "getonboard",
   "jobicy",
+  "jobgether",
 ] as const;
 
 export type ListingUrlPlatform = (typeof LISTING_URL_PLATFORMS)[number];
@@ -26,6 +28,7 @@ const FLAT_FIELD_BY_PLATFORM: Record<ListingUrlPlatform, string> = {
   himalayas: "listingUrl_himalayas",
   getonboard: "listingUrl_getonboard",
   jobicy: "listingUrl_jobicy",
+  jobgether: "listingUrl_jobgether",
 };
 
 function fieldError(field: string, message: string): AppError {
@@ -40,7 +43,7 @@ export function isValidListingUrlForPlatform(
   platform: ListingUrlPlatform,
   value: string
 ): boolean {
-  // Himalayas / Get on Board / Jobicy store a country name, not a listing URL.
+  // Himalayas / Get on Board / Jobicy / Jobgether store a country name, not a listing URL.
   if (platform === "himalayas") {
     return isValidHimalayasCountry(value);
   }
@@ -52,6 +55,9 @@ export function isValidListingUrlForPlatform(
   }
   if (platform === "jobicy") {
     return isValidJobicyCountry(value);
+  }
+  if (platform === "jobgether") {
+    return isValidJobgetherCountry(value);
   }
 
   let parsed: URL;
@@ -221,6 +227,12 @@ export function parseListingUrlsPatch(
         throw fieldError(
           field,
           "Invalid jobicy country (store a country name like \"Argentina\", not a URL)"
+        );
+      }
+      if (platform === "jobgether") {
+        throw fieldError(
+          field,
+          "Invalid jobgether country (store a country name like \"Argentina\", not a URL)"
         );
       }
       throw fieldError(

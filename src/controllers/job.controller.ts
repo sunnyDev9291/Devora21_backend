@@ -36,6 +36,10 @@ import {
   crawlJobicyJobsByCountry,
   resolveJobicyCountryForUser,
 } from "../services/jobicy-discovery.service";
+import {
+  crawlJobgetherJobsByCountry,
+  resolveJobgetherCountryForUser,
+} from "../services/jobgether-discovery.service";
 import { scrapeJobFromUrl } from "../services/zyte.service";
 import {
   resolveListingUrlForUser,
@@ -47,6 +51,7 @@ import type {
   CrawlHiringCafeInput,
   CrawlHimalayasInput,
   CrawlJobicyInput,
+  CrawlJobgetherInput,
   CrawlWorkableInput,
   CrawlWorkingNomadsInput,
   DiscoverBuiltInInput,
@@ -439,6 +444,33 @@ export async function crawlJobicyHandler(
       countryName: body.countryName,
     });
     const result = await crawlJobicyJobsByCountry(country);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Jobgether crawl — country name only (body or profile listingUrls.jobgether).
+ * Full-remote jobs sorted by date; keep only postedAt within last 24 hours.
+ * Stops paging when an older job appears.
+ */
+export async function crawlJobgetherHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    if (!req.authUser?.id) {
+      throw new AppError(401, "Authentication required");
+    }
+
+    const body = req.body as CrawlJobgetherInput;
+    const country = await resolveJobgetherCountryForUser(req.authUser.id, {
+      country: body.country,
+      countryName: body.countryName,
+    });
+    const result = await crawlJobgetherJobsByCountry(country);
     res.status(200).json(result);
   } catch (err) {
     next(err);

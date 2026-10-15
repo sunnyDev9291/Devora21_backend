@@ -43,7 +43,7 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
     if (aiMockEnabled) {
       console.log("  AI responses: mocked (no Claude API calls)");
     } else {
-      console.log(`  Model: ${CLAUDE_MODEL} (thinking: between_tools; plain-text stream)`);
+      console.log(`  Default model: ${CLAUDE_MODEL} (plain-text stream; GET /ai/models for catalog)`);
     }
     console.log(
       `  AI internal auth: ${env.AI_INTERNAL_API_KEY ? "required (Bearer token)" : "open (local dev only)"}`

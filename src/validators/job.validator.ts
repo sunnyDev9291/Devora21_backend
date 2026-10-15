@@ -355,6 +355,37 @@ export type JobicyJobCrawlResult = {
   jobs: JobicyJobDiscoveryItem[];
 };
 
+/** POST /jobs/crawl/jobgether — country name only (not a listing URL). */
+export const crawlJobgetherSchema = z
+  .object({
+    country: optionalCountryName,
+    countryName: optionalCountryName,
+  })
+  .transform((value) => ({
+    country: value.country ?? value.countryName,
+    countryName: value.countryName ?? value.country,
+  }));
+
+export type CrawlJobgetherInput = z.infer<typeof crawlJobgetherSchema>;
+
+export type JobgetherJobDiscoveryItem = {
+  jobId: string;
+  companyName: string;
+  jobTitle: string;
+  jobUrl: string;
+  postedAt: string;
+};
+
+export type JobgetherJobCrawlResult = {
+  sourceUrl: string;
+  platform: "jobgether";
+  country: string;
+  locationSlug: string;
+  pagesScraped: number;
+  totalCount: number;
+  jobs: JobgetherJobDiscoveryItem[];
+};
+
 /** POST /jobs/check/english-team — Yes/No English-team analysis. */
 export const checkEnglishTeamSchema = z
   .object({

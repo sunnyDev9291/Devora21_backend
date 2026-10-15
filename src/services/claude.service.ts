@@ -1,4 +1,9 @@
 import { env, aiMockEnabled } from "../config/env";
+import {
+  CLAUDE_MODEL as DEFAULT_CLAUDE_MODEL,
+  modelSupportsBetweenToolsThinking,
+  resolveClaudeModel,
+} from "../lib/claude-models";
 import type { ClaudeChatInput } from "../validators/ai.validator";
 import {
   createMockChatCompletion,
@@ -6,9 +11,10 @@ import {
 } from "./mock-ai.service";
 
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
-export const CLAUDE_MODEL = "claude-sonnet-5-5";
+/** Default model when the request omits `model` (re-export for boot logs). */
+export const CLAUDE_MODEL = DEFAULT_CLAUDE_MODEL;
 /**
- * Sonnet 5.5 output ceiling (API allows up to 128k).
+ * Output ceiling (API allows up to 128k on supported models).
  * We always request this — no artificial 16k/64k app caps.
  */
 export const CLAUDE_MAX_OUTPUT_TOKENS = 128_000;
@@ -80,20 +86,29 @@ function splitMessages(input: ClaudeChatInput): {
   };
 }
 
+function resolveRequestModel(input: ClaudeChatInput): string {
+  return resolveClaudeModel(input.model ?? null);
+}
+
 function buildClaudeBody(input: ClaudeChatInput, stream: boolean): Record<string, unknown> {
   const { system, messages } = splitMessages(input);
+  const model = resolveRequestModel(input);
 
   const body: Record<string, unknown> = {
-    model: CLAUDE_MODEL,
+    model,
     // Always use the model ceiling — ignore smaller client maxTokens.
     max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
     messages,
     stream,
-    // Sonnet 5.5: "disabled" is rejected. "between_tools" turns off up-front
-    // thinking so the full max_tokens stays available for streamed text/JSON.
-    thinking: { type: "between_tools" },
   };
   void input.maxTokens;
+
+  // Sonnet 5.5+: "disabled" is rejected. "between_tools" turns off up-front
+  // thinking so the full max_tokens stays available for streamed text/JSON.
+  // Claude 4.x allowlisted models do not use this parameter.
+  if (modelSupportsBetweenToolsThinking(model)) {
+    body.thinking = { type: "between_tools" };
+  }
 
   if (system) {
     body.system = system;
@@ -161,7 +176,7 @@ export async function createChatCompletion(
     throw new Error("Claude returned an empty response");
   }
 
-  return { content, model: CLAUDE_MODEL };
+  return { content, model: resolveRequestModel(input) };
 }
 
 function raceWithTimeout<T>(

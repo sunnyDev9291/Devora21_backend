@@ -1,3 +1,4 @@
+import { resolveClaudeModel } from "../lib/claude-models";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
@@ -164,7 +165,8 @@ async function runResumeFromJobPipeline(
     customPrompt?: string;
     profilePrompt?: string;
     promptContent?: string;
-  }
+  },
+  modelId?: string
 ): Promise<void> {
   try {
     await setJobStatus(jobId, "scraping", {
@@ -219,13 +221,14 @@ async function runResumeFromJobPipeline(
     await setJobStatus(jobId, "generating", {
       jobTitle,
       companyName,
-      message: `Calling Claude (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
+      message: `Calling Claude ${modelId} (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
     });
 
     const ai = await createChatCompletion({
       messages: bundle.messages,
       maxTokens: CLAUDE_MAX_OUTPUT_TOKENS,
       jsonObject: true,
+      model: modelId,
     });
 
     await setJobStatus(jobId, "generating", {
@@ -315,6 +318,9 @@ export async function enqueueResumeFromJob(
   userId: string,
   input: ResumeFromJobInput
 ): Promise<ResumeFromJobAccepted> {
+  // Validate before enqueue so invalid models return 400 immediately.
+  const modelId = resolveClaudeModel(input.model);
+
   const job = await prisma.resumeGenerationJob.create({
     data: {
       userId,
@@ -333,9 +339,9 @@ export async function enqueueResumeFromJob(
       customPrompt: input.customPrompt,
       profilePrompt: input.profilePrompt,
       promptContent: input.promptContent,
-    }
+    },
+    modelId
   );
-
 
   return {
     jobId: job.id,

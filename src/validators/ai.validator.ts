@@ -11,6 +11,8 @@ export type ClaudeChatInput = {
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   maxTokens: number;
   jsonObject: boolean;
+  /** Resolved Anthropic model id (allowlisted). */
+  model?: string;
 };
 
 const optionalTrimmedString = z.preprocess((value) => {
@@ -33,6 +35,14 @@ const strictJsonObjectSchema = z.preprocess(
   z.boolean()
 );
 
+/** Optional Anthropic model id from the client (validated against allowlist later). */
+const optionalModelId = z.preprocess((value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().min(1).max(120).optional());
+
 export const chatCompletionsSchema = z
   .object({
     /**
@@ -40,7 +50,7 @@ export const chatCompletionsSchema = z
      * from stored template structure + writing prompt + JD. Q&A mode still needs them.
      */
     messages: z.array(chatMessageSchema).default([]),
-    /** Accepted for FE compat but ignored — Sonnet always uses model max (128k). */
+    /** Accepted for FE compat but ignored — always uses model max (128k). */
     maxTokens: z
       .number()
       .int()
@@ -49,6 +59,10 @@ export const chatCompletionsSchema = z
       .optional()
       .default(128_000),
     jsonObject: strictJsonObjectSchema.optional().default(false),
+    /** Anthropic model id (Haiku / Sonnet / Opus). Omit → server default. */
+    model: optionalModelId,
+    model_id: optionalModelId,
+    modelId: optionalModelId,
     /**
      * BFF / internal-key only: which user's profile prompt to apply.
      * Ignored when the request already has a session / user API key.
@@ -83,10 +97,12 @@ export const chatCompletionsSchema = z
     const jobDescription = value.jobDescription || value.job_description || "";
     const skipEnglishTeamGate =
       value.skipEnglishTeamGate === true || value.skip_english_team_gate === true;
+    const model = value.model || value.model_id || value.modelId;
     return {
       messages: value.messages,
       maxTokens: value.maxTokens,
       jsonObject: value.jsonObject,
+      model,
       userId: value.userId,
       jobTitle,
       jobDescription,
