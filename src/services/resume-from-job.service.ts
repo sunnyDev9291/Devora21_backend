@@ -1,8 +1,8 @@
-import { resolveClaudeModel } from "../lib/claude-models";
+import { getClaudeMaxOutputTokens, resolveClaudeModel } from "../lib/claude-models";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../middleware/errorHandler";
 import { parseAndFinalizeResumeJson } from "../lib/resume/content-postprocess";
-import { createChatCompletion, CLAUDE_MAX_OUTPUT_TOKENS } from "./claude.service";
+import { createChatCompletion } from "./claude.service";
 import { buildResumeGeneratePrompt } from "./resume-generate.service";
 import { renderResume } from "./resume-render.service";
 import { createBackblazeDownloadUrl } from "./backblaze.service";
@@ -226,7 +226,7 @@ async function runResumeFromJobPipeline(
 
     const ai = await createChatCompletion({
       messages: bundle.messages,
-      maxTokens: CLAUDE_MAX_OUTPUT_TOKENS,
+      maxTokens: getClaudeMaxOutputTokens(modelId ?? ""),
       jsonObject: true,
       model: modelId,
     });

@@ -1,6 +1,8 @@
 import { env, aiMockEnabled } from "../config/env";
 import {
   CLAUDE_MODEL as DEFAULT_CLAUDE_MODEL,
+  CLAUDE_MAX_OUTPUT_TOKENS_CEILING,
+  getClaudeMaxOutputTokens,
   modelSupportsBetweenToolsThinking,
   resolveClaudeModel,
 } from "../lib/claude-models";
@@ -14,10 +16,10 @@ const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 /** Default model when the request omits `model` (re-export for boot logs). */
 export const CLAUDE_MODEL = DEFAULT_CLAUDE_MODEL;
 /**
- * Output ceiling (API allows up to 128k on supported models).
- * We always request this — no artificial 16k/64k app caps.
+ * Highest output ceiling we request (Sonnet/Opus).
+ * Prefer getClaudeMaxOutputTokens(model) — Haiku is capped at 64k.
  */
-export const CLAUDE_MAX_OUTPUT_TOKENS = 128_000;
+export const CLAUDE_MAX_OUTPUT_TOKENS = CLAUDE_MAX_OUTPUT_TOKENS_CEILING;
 /** Fail if Anthropic never starts sending the response body. */
 const AI_CONNECT_TIMEOUT_MS = 30_000;
 /** Fail if no stream bytes arrive for this long after headers / last chunk. */
@@ -93,15 +95,20 @@ function resolveRequestModel(input: ClaudeChatInput): string {
 function buildClaudeBody(input: ClaudeChatInput, stream: boolean): Record<string, unknown> {
   const { system, messages } = splitMessages(input);
   const model = resolveRequestModel(input);
+  const modelCeiling = getClaudeMaxOutputTokens(model);
+  // Use the model’s Anthropic ceiling; never exceed it (Haiku = 64k).
+  const requested =
+    typeof input.maxTokens === "number" && input.maxTokens > 0
+      ? input.maxTokens
+      : modelCeiling;
+  const maxTokens = Math.min(requested, modelCeiling);
 
   const body: Record<string, unknown> = {
     model,
-    // Always use the model ceiling — ignore smaller client maxTokens.
-    max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+    max_tokens: maxTokens,
     messages,
     stream,
   };
-  void input.maxTokens;
 
   // Sonnet 5.5+: "disabled" is rejected. "between_tools" turns off up-front
   // thinking so the full max_tokens stays available for streamed text/JSON.

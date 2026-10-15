@@ -1,13 +1,14 @@
 import { Response, NextFunction } from "express";
 import { claudeEnabled } from "../config/env";
 import { ALLOWED_FRONTEND_ORIGINS } from "../config/frontend";
-import { listClaudeModelsResponse, resolveClaudeModel } from "../lib/claude-models";
+import {
+  getClaudeMaxOutputTokens,
+  listClaudeModelsResponse,
+  resolveClaudeModel,
+} from "../lib/claude-models";
 import { AppError } from "../middleware/errorHandler";
 import { verifyAccessToken } from "../lib/jwt";
-import {
-  CLAUDE_MAX_OUTPUT_TOKENS,
-  streamChatCompletion,
-} from "../services/claude.service";
+import { streamChatCompletion } from "../services/claude.service";
 import * as apiKeyService from "../services/api-key.service";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
@@ -19,10 +20,10 @@ function serviceUnavailable(res: Response): void {
   res.status(503).json({ error: "Claude API is not configured" });
 }
 
-/** No artificial app caps — always the model output ceiling. */
-function resolveMaxTokens(_requested?: number): number {
+/** Use the selected model's Anthropic output ceiling (Haiku 64k, others up to 128k). */
+function resolveMaxTokens(modelId: string, _requested?: number): number {
   void _requested;
-  return CLAUDE_MAX_OUTPUT_TOKENS;
+  return getClaudeMaxOutputTokens(modelId);
 }
 
 function authModeOf(req: AuthenticatedRequest): "userKey" | "internal" | "cookie" | "unknown" {
@@ -124,7 +125,7 @@ function buildPlainChatInput(
 ): ClaudeChatInput {
   return {
     messages: body.messages,
-    maxTokens: resolveMaxTokens(body.maxTokens),
+    maxTokens: resolveMaxTokens(model, body.maxTokens),
     jsonObject: false,
     model,
   };
@@ -256,11 +257,11 @@ async function buildResumeChatInput(
     context: "ai/chat/completions",
   });
 
-  // Ignore FE/body maxTokens caps — always use model maximum output.
+  // Ignore FE/body maxTokens caps — always use this model's Anthropic ceiling.
   return {
     messages: bundle.messages,
     jsonObject: true,
-    maxTokens: resolveMaxTokens(body.maxTokens),
+    maxTokens: resolveMaxTokens(model, body.maxTokens),
     model,
   };
 }

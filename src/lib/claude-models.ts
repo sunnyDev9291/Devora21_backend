@@ -111,6 +111,24 @@ export function modelSupportsBetweenToolsThinking(modelId: string): boolean {
   return /claude-(?:sonnet|opus|haiku)-5(?:-\d+)?$/i.test(modelId.trim());
 }
 
+/** Absolute max we ever request (supported on Sonnet/Opus 4.x+). */
+export const CLAUDE_MAX_OUTPUT_TOKENS_CEILING = 128_000;
+
+/** Haiku 4.5 Anthropic output ceiling. */
+export const CLAUDE_HAIKU_MAX_OUTPUT_TOKENS = 64_000;
+
+/**
+ * Per-model Anthropic max_tokens ceiling.
+ * Requesting above the model limit returns 400 (e.g. Haiku 4.5 → 64k).
+ */
+export function getClaudeMaxOutputTokens(modelId: string): number {
+  const id = modelId.trim().toLowerCase();
+  if (id.includes("haiku")) {
+    return CLAUDE_HAIKU_MAX_OUTPUT_TOKENS;
+  }
+  return CLAUDE_MAX_OUTPUT_TOKENS_CEILING;
+}
+
 export function listClaudeModelsResponse(): {
   defaultModelId: string;
   models: ClaudeModelCatalogEntry[];
