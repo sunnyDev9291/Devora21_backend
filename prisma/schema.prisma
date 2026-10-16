@@ -27,6 +27,13 @@ model User {
   resumeBuilderEnabled Boolean @default(false)
   /** Super Admin console — required for /admin/* APIs. */
   isSuperAdmin Boolean @default(false)
+  /**
+   * Per–Super Admin operator gateway (FE /super-admin second gate).
+   * Username unique when set; password stored as bcrypt hash only.
+   */
+  gatewayUsername         String?   @unique @map("gateway_username")
+  gatewayPasswordHash     String?   @map("gateway_password_hash")
+  gatewayCredentialsSetAt DateTime? @map("gateway_credentials_set_at")
   onboardingCompleted Boolean @default(false)
   /** Active stored resume template id (`tpl_…`). */
   resumeTemplateId       String?
@@ -49,10 +56,71 @@ model User {
   resumeGenerationJobs   ResumeGenerationJob[]
   remoteDevices          RemoteDevice[]
   resumeRemoteDeliveries ResumeRemoteDelivery[]
+  applicationQaSessions  ApplicationQaSession[]
 
   @@unique([provider, providerId])
   @@index([email])
   @@index([resumeTemplateId])
+}
+
+/**
+ * One Chrome tab recording session for job-application Q&A capture.
+ * Extension upserts by (userId, tabSessionId); Super Admin reads across owners.
+ */
+model ApplicationQaSession {
+  id            String   @id @default(uuid())
+  userId        String
+  /** Client-generated id stable for the life of one browser tab session. */
+  tabSessionId  String   @map("tab_session_id")
+  tabUrl        String   @map("tab_url") @db.Text
+  pageTitle     String?  @map("page_title")
+  status        String   @default("recording") // recording | paused | deleted
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastSyncedAt  DateTime @default(now()) @map("last_synced_at")
+
+  user  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items ApplicationQaItem[]
+
+  @@unique([userId, tabSessionId])
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([status, updatedAt(sort: Desc)])
+  @@map("application_qa_sessions")
+}
+
+model ApplicationQaItem {
+  id          String   @id @default(uuid())
+  sessionId   String   @map("session_id")
+  /**
+   * Stable element key within a session (DOM identity — not a human "question").
+   * Column name kept as question_key for backward-compatible DB mapping.
+   */
+  questionKey String   @map("question_key")
+  /** Human-readable element summary (tag/type/#id/[name]). */
+  question    String   @db.Text
+  /** Current input value for this element. */
+  answer      String   @db.Text
+  fieldType   String?  @map("field_type")
+  /** DOM event that last updated this row: input | change | click | blur */
+  eventType   String?  @map("event_type")
+  cssSelector String?  @map("css_selector") @db.Text
+  elementTag  String?  @map("element_tag")
+  elementId   String?  @map("element_id")
+  elementName String?  @map("element_name")
+  elementClass String? @map("element_class") @db.Text
+  /** Selected attributes snapshot (JSON object). */
+  attributes  Json?
+  /** Client event time (ms epoch or ISO stored as DateTime). */
+  occurredAt  DateTime? @map("occurred_at")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  session ApplicationQaSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, questionKey])
+  @@index([sessionId])
+  @@index([sessionId, occurredAt])
+  @@map("application_qa_items")
 }
 
 /** Original DOCX resume template uploaded by the user (source of truth for fill/render). */

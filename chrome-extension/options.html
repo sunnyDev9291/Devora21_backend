@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Devora21 Q&A Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Devora21 Application Q&A</h1>
+      <p class="lede">
+        Configure secure sync to your Devora21 account. With recording on, answers are
+        buffered locally first. They sync only after the tab is an <strong>Apply Page</strong>
+        (email input + resume upload, including inside iframes / shadow DOM). If Apply Page
+        is never detected, nothing is uploaded. Passwords and payment fields are never stored.
+      </p>
+
+      <label class="consent">
+        <input id="consentAccepted" type="checkbox" />
+        I consent to capturing job-application questions and answers I enter in the
+        browser, and syncing them to Devora21 for Super Admin review.
+      </label>
+
+      <label>
+        API base URL
+        <input id="apiBaseUrl" type="url" placeholder="https://api.example.com" />
+      </label>
+
+      <label>
+        API key (<code>dv21_…</code>)
+        <input id="apiKey" type="password" autocomplete="off" placeholder="dv21_…" />
+      </label>
+
+      <label>
+        Optional host restrict list (one per line)
+        <textarea
+          id="allowedHosts"
+          rows="6"
+          placeholder="Leave empty to record on ALL sites.&#10;Or restrict, e.g.:&#10;boards.greenhouse.io&#10;jobs.lever.co&#10;myworkdayjobs.com"
+        ></textarea>
+      </label>
+      <p class="lede" style="margin-top: -8px; font-size: 12px">
+        Leave blank = every apply page. Only fill this if you want to limit capturing to
+        specific domains.
+      </p>
+
+      <label class="consent">
+        <input id="recordingEnabled" type="checkbox" />
+        Enable recording by default
+      </label>
+
+      <div class="row">
+        <button id="save" type="button">Save settings</button>
+        <button id="test" type="button" class="secondary">Test connection</button>
+      </div>
+      <p id="message" class="message" hidden></p>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

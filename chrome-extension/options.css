@@ -1,0 +1,94 @@
+:root {
+  --ink: #0f172a;
+  --muted: #64748b;
+  --teal: #0f766e;
+  --line: #e2e8f0;
+  --bg: #f8fafc;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+.lede {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+label.consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+input[type="url"],
+input[type="password"],
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #334155;
+}
+
+.message {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.message.ok {
+  color: var(--teal);
+}
+
+.message.err {
+  color: #b91c1c;
+}
+
+code {
+  font-size: 12px;
+}

@@ -58,6 +58,23 @@ const aiChatLimiter = rateLimit({
   },
 });
 
+/** Always on — Super Admin gateway unlock attempts. */
+const adminGatewayVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const authUser = (req as AuthenticatedRequest).authUser;
+    return `admin-gw:${authUser?.id ?? req.ip ?? "anonymous"}`;
+  },
+  validate: { keyGeneratorIpFallback: false },
+  message: {
+    error: "Too many gateway verify attempts, please try again later",
+    message: "Too many gateway verify attempts, please try again later",
+  },
+});
+
 const noOp: RequestHandler = (_req, _res, next) => next();
 
 export const authRateLimiter: RequestHandler = rateLimitEnabled ? limiter : noOp;
@@ -66,3 +83,5 @@ export const onboardingRateLimiter: RequestHandler = rateLimitEnabled
   : noOp;
 export const jobScrapeRateLimiter: RequestHandler = jobScrapeLimiter;
 export const aiChatRateLimiter: RequestHandler = aiChatLimiter;
+export const adminGatewayVerifyRateLimiter: RequestHandler =
+  adminGatewayVerifyLimiter;

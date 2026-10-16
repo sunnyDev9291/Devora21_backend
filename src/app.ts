@@ -8,6 +8,7 @@ import resumeRoutes from "./routes/resume.routes";
 import aiRoutes from "./routes/ai.routes";
 import jobRoutes from "./routes/job.routes";
 import logsRoutes from "./routes/logs.routes";
+import extensionRoutes from "./routes/extension.routes";
 import { errorHandler } from "./middleware/errorHandler";
 import { requestLogger } from "./middleware/request-logger";
 import { ALLOWED_FRONTEND_ORIGINS } from "./config/frontend";
@@ -27,7 +28,11 @@ app.set("trust proxy", 1);
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || ALLOWED_FRONTEND_ORIGINS.includes(origin)) {
+      if (
+        !origin ||
+        ALLOWED_FRONTEND_ORIGINS.includes(origin) ||
+        origin.startsWith("chrome-extension://")
+      ) {
         callback(null, true);
         return;
       }
@@ -66,6 +71,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
+app.use("/extension", extensionRoutes);
 app.use("/resume", resumeRoutes);
 app.use("/ai", aiRoutes);
 app.use("/jobs", jobRoutes);

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Devora21 Q&A</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main>
+      <header class="header">
+        <img class="logo" src="icons/icon48.png" width="40" height="40" alt="Devora21" />
+        <div>
+          <div class="eyebrow">DEVORA21 · SIDEBAR</div>
+          <h1>Application Q&A</h1>
+          <p id="statusLine" class="status off">Recording off</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="row">
+          <span>Owner</span>
+          <strong id="ownerEmail">—</strong>
+        </div>
+        <div class="row">
+          <span>This tab</span>
+          <strong id="tabHost">—</strong>
+        </div>
+        <div class="row">
+          <span>Apply page</span>
+          <strong id="applyPage">—</strong>
+        </div>
+        <div class="row">
+          <span>Signals</span>
+          <strong id="applySignals">—</strong>
+        </div>
+        <div class="row">
+          <span>Site scope</span>
+          <strong id="hostAllowed">—</strong>
+        </div>
+        <div class="row">
+          <span>Buffered events</span>
+          <strong id="pairCount">0</strong>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="btnToggle" type="button">Enable recording</button>
+        <button id="btnPause" type="button" class="secondary">Pause tab</button>
+        <button id="btnResume" type="button" class="secondary">Resume tab</button>
+        <button id="btnClear" type="button" class="danger">Clear tab buffer</button>
+        <button id="btnRefresh" type="button" class="secondary">Refresh status</button>
+      </section>
+
+      <p class="hint">
+        This panel stays open as a Chrome sidebar. DOM input events (value + element info)
+        buffer locally while recording is on. When this tab becomes an Apply Page
+        (email + resume), events sync to the backend in real time. No question↔answer
+        matching — Super Admin sees a chronological event list. Passwords / payment
+        fields are excluded.
+      </p>
+      <a id="openOptions" href="#">Open options</a>
+      <pre id="error" class="error" hidden></pre>
+    </main>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

@@ -24,6 +24,12 @@ export async function requireAuth(
   next: NextFunction
 ): Promise<void> {
   try {
+    // Allow prior middleware (e.g. SSE stream ticket) to attach authUser.
+    if (req.authUser?.id) {
+      next();
+      return;
+    }
+
     const resolved = await resolveAuth(req, res);
 
     if (!resolved) {

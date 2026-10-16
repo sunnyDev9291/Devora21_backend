@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Devora21 Q&A</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header class="header">
+        <img class="logo" src="icons/icon48.png" width="40" height="40" alt="Devora21" />
+        <div>
+          <div class="eyebrow">DEVORA21 · EXTENSION</div>
+          <h1>Application Q&A</h1>
+          <p id="statusLine" class="status off">Recording off</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <div class="row">
+          <span>Owner</span>
+          <strong id="ownerEmail">—</strong>
+        </div>
+        <div class="row">
+          <span>This tab</span>
+          <strong id="tabHost">—</strong>
+        </div>
+        <div class="row">
+          <span>Apply page</span>
+          <strong id="applyPage">—</strong>
+        </div>
+        <div class="row">
+          <span>Signals</span>
+          <strong id="applySignals">—</strong>
+        </div>
+        <div class="row">
+          <span>Site scope</span>
+          <strong id="hostAllowed">—</strong>
+        </div>
+        <div class="row">
+          <span>Buffered fields</span>
+          <strong id="pairCount">0</strong>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="btnToggle" type="button">Enable recording</button>
+        <button id="btnPause" type="button" class="secondary">Pause tab</button>
+        <button id="btnResume" type="button" class="secondary">Resume tab</button>
+        <button id="btnClear" type="button" class="danger">Clear tab buffer</button>
+      </section>
+
+      <p class="hint">
+        While recording is on, answers are buffered locally. When this tab becomes an Apply
+        Page (email + resume upload detected, including inside iframes), the buffer is sent
+        to the backend and sync continues. If never detected, nothing is uploaded. Passwords
+        / payment fields are excluded.
+      </p>
+      <a id="openOptions" href="#">Open options</a>
+      <pre id="error" class="error" hidden></pre>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
