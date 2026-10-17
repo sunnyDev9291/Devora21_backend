@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <title>Devora21 Q&A</title>
-    <link rel="stylesheet" href="sidepanel.css" />
+    <link rel="stylesheet" href="sidepanel.css?v=2.1.10" />
   </head>
   <body>
     <main>
@@ -51,16 +51,49 @@
         <button id="btnRefresh" type="button" class="secondary">Refresh status</button>
       </section>
 
+      <section class="inspector" id="inspector">
+        <div class="inspector-head">
+          <div>
+            <div class="eyebrow">DOM INSPECTOR</div>
+            <h2>Node tree</h2>
+          </div>
+          <button id="btnClearHl" type="button" class="secondary tiny">Clear highlight</button>
+        </div>
+        <div class="view-toggle" role="tablist" aria-label="Tree view mode">
+          <button type="button" id="btnViewDom" class="view-toggle-btn is-active" role="tab" aria-selected="true" data-mode="dom">DOM View</button>
+          <button type="button" id="btnViewBfs" class="view-toggle-btn" role="tab" aria-selected="false" data-mode="bfs">BFS View</button>
+        </div>
+        <div class="legend">
+          <span class="lg blue"><i></i>Visited</span>
+          <span class="lg text"><i></i>Text match M1–M5</span>
+          <span class="lg trigger"><i></i>Trigger (0)</span>
+          <span class="lg selected"><i></i>Selected</span>
+        </div>
+        <p id="inspectorMeta" class="inspector-meta">Waiting for a user action…</p>
+        <div class="tree-toolbar">
+          <button type="button" id="btnZoomOut" class="secondary tiny" title="Zoom out">−</button>
+          <button type="button" id="btnZoomIn" class="secondary tiny" title="Zoom in">+</button>
+          <button type="button" id="btnFitView" class="secondary tiny" title="Fit entire tree">Fit</button>
+          <span id="zoomLabel" class="zoom-label">100%</span>
+        </div>
+        <div id="domTree" class="node-graph" aria-label="DOM node tree"></div>
+        <div id="nodeDetail" class="node-detail" hidden>
+          <div class="detail-title">Selected DOM</div>
+          <pre id="nodeDetailBody" class="detail-body"></pre>
+        </div>
+        <div id="aiContextDetail" class="node-detail ai-context" hidden>
+          <div class="detail-title">Last DOM context → AI</div>
+          <pre id="aiContextBody" class="detail-body"></pre>
+        </div>
+      </section>
+
       <p class="hint">
-        This panel stays open as a Chrome sidebar. DOM input events (value + element info)
-        buffer locally while recording is on. When this tab becomes an Apply Page
-        (email + resume), events sync to the backend in real time. No question↔answer
-        matching — Super Admin sees a chronological event list. Passwords / payment
-        fields are excluded.
+        Click a node to outline it on the page and show its DOM details below.
+        Tree updates when a new action is captured.
       </p>
       <a id="openOptions" href="#">Open options</a>
       <pre id="error" class="error" hidden></pre>
     </main>
-    <script type="module" src="sidepanel.js"></script>
+    <script type="module" src="sidepanel.js?v=2.1.10"></script>
   </body>
 </html>

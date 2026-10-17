@@ -1,8 +1,65 @@
 import { z } from "zod";
 
-/** Chronological DOM input event from the Chrome extension (no Q→A matching). */
+const bfsNearbyElementSchema = z.object({
+  distance: z.number().int().min(0).max(100).optional(),
+  relationship: z.string().max(32).optional(),
+  tagName: z.string().max(64).optional(),
+  outerHTML: z.string().max(20_000).optional(),
+  textPreview: z.string().max(500).optional(),
+});
+
+const domContextSchema = z
+  .object({
+    version: z.number().optional(),
+    strategy: z.string().max(32).optional(),
+    triggeredOuterHTML: z.string().max(20_000).optional(),
+    nearbyElements: z.array(bfsNearbyElementSchema).max(8).optional(),
+    pageTitle: z.string().max(500).optional(),
+    valuePreview: z.string().max(500).optional(),
+    actionType: z.string().max(64).optional(),
+    componentType: z.string().max(64).optional(),
+    element: z
+      .object({
+        tagName: z.string().max(64).optional(),
+        inputType: z.string().max(64).optional(),
+        id: z.string().max(256).optional(),
+        name: z.string().max(256).optional(),
+        cssSelector: z.string().max(2000).optional(),
+        componentType: z.string().max(64).optional(),
+      })
+      .optional(),
+    // Legacy fields (pre-BFS clients)
+    labels: z.array(z.string().max(500)).max(12).optional(),
+    ariaLabel: z.string().max(500).optional(),
+    ariaLabelledBy: z.string().max(1000).optional(),
+    ariaDescribedBy: z.string().max(1000).optional(),
+    nearbyText: z.string().max(2000).optional(),
+    siblings: z
+      .array(
+        z.object({
+          tag: z.string().max(64).optional(),
+          text: z.string().max(500).optional(),
+        })
+      )
+      .max(12)
+      .optional(),
+    parents: z
+      .array(
+        z.object({
+          tag: z.string().max(64).optional(),
+          id: z.string().max(256).optional(),
+          className: z.string().max(500).optional(),
+          text: z.string().max(800).optional(),
+        })
+      )
+      .max(4)
+      .optional(),
+    htmlSnippet: z.string().max(20_000).optional(),
+  })
+  .optional();
+
+/** Chronological DOM input event (+ optional context for DeepSeek Q match). */
 const inputEventSchema = z.object({
-  /** Stable element identity within the tab session. */
   elementKey: z.string().trim().min(1).max(500),
   value: z.string().max(20_000),
   eventType: z.string().trim().max(64).optional(),
@@ -14,12 +71,20 @@ const inputEventSchema = z.object({
   className: z.string().trim().max(1000).optional(),
   cssSelector: z.string().trim().max(2000).optional(),
   attributes: z.record(z.string(), z.string()).optional(),
-  /** Optional display summary; server can derive if missing. */
   label: z.string().trim().max(2000).optional(),
   autocomplete: z.string().trim().max(128).optional(),
+  actionType: z.string().trim().max(64).optional(),
+  componentType: z.string().trim().max(64).optional(),
+  triggeredOuterHTML: z.string().max(20_000).optional(),
+  /** Client-side cached AI question — skips DeepSeek when set. */
+  cachedQuestion: z.string().trim().max(2000).optional(),
+  cachedConfidence: z.number().min(0).max(1).optional(),
+  /** BFS DOM context for first-time matching. */
+  domContext: domContextSchema,
+  /** When true, request AI match even if a prior unmatched row exists. */
+  forceMatch: z.boolean().optional(),
 });
 
-/** Legacy shape — accepted and mapped into input events. */
 const legacyQaPairSchema = z.object({
   question: z.string().trim().min(1).max(2000),
   answer: z.string().max(20_000),
@@ -34,6 +99,8 @@ const legacyQaPairSchema = z.object({
   className: z.string().trim().max(1000).optional(),
   attributes: z.record(z.string(), z.string()).optional(),
   timestamp: z.union([z.number(), z.string()]).optional(),
+  cachedQuestion: z.string().trim().max(2000).optional(),
+  domContext: domContextSchema,
 });
 
 export const syncApplicationQaSchema = z
@@ -70,6 +137,13 @@ export const syncApplicationQaSchema = z
       attributes: e.attributes,
       label: e.label,
       autocomplete: e.autocomplete,
+      actionType: e.actionType,
+      componentType: e.componentType,
+      triggeredOuterHTML: e.triggeredOuterHTML,
+      cachedQuestion: e.cachedQuestion,
+      cachedConfidence: e.cachedConfidence,
+      domContext: e.domContext,
+      forceMatch: e.forceMatch,
     }));
 
     const fromLegacy = (v.questionsAnswers ?? v.questions_answers ?? []).map(
@@ -87,6 +161,10 @@ export const syncApplicationQaSchema = z
         attributes: p.attributes,
         label: p.question,
         autocomplete: p.autocomplete,
+        cachedQuestion: p.cachedQuestion,
+        cachedConfidence: undefined as number | undefined,
+        domContext: p.domContext,
+        forceMatch: undefined as boolean | undefined,
       })
     );
 

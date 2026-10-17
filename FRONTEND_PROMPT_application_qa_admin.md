@@ -29,8 +29,8 @@ If refresh shows data but typing does not update live, the page is not
 subscribed with auth — use **fetch + Bearer** to `/admin/application-qa/stream`
 (not a bare EventSource).
 
-**Detail content (required):** follow `FRONTEND_PROMPT_application_qa_dom_events.md`.
-Show chronological **DOM input events**, not scraped Question/Answer pairs.
+**Detail content (required):** follow `FRONTEND_PROMPT_application_qa_ai_match.md`.
+Show **Matched Q&A** (DeepSeek) + **Unmatched DOM events**. Live via SSE.
 
 ================================================================================
 UX

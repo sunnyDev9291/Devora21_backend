@@ -10,6 +10,9 @@ import { syncApplicationQa } from "./lib/api.js";
 
 const syncTimers = new Map();
 const scanTimers = new Map();
+/** Prevent concurrent flushSync from overwriting fresher answers during AI match. */
+const syncInFlight = new Set();
+const syncAgain = new Set();
 
 /** Always open the extension UI as the Chrome side panel (not a popup). */
 async function enableSidePanelBehavior() {
@@ -54,6 +57,7 @@ function emptyTabState(tabUrl = "") {
     hasEmail: false,
     hasResumeUpload: false,
     flushedOnce: false,
+    matchCache: {},
   };
 }
 
@@ -85,11 +89,12 @@ async function updateBadge(tabId) {
     text = "❚❚";
     color = "#d97706";
   } else if (state.isApplyPage) {
+    // Show event count when we have any; REC only means apply-page sync is armed.
     text = bufCount > 0 ? String(Math.min(bufCount, 99)) : "REC";
     color = "#0f766e";
   } else if (bufCount > 0) {
     text = String(Math.min(bufCount, 99));
-    color = "#0284c7"; // buffering
+    color = "#0284c7"; // buffering before apply latch
   } else {
     text = "…";
     color = "#94a3b8";
@@ -126,44 +131,122 @@ function scheduleSync(tabId) {
 
 /** Only sync to backend after Apply Page is confirmed. */
 async function flushSync(tabId) {
-  const settings = await getSettings();
-  if (!settings.recordingEnabled || !settings.consentAccepted) return;
-  if (!settings.apiKey?.trim()) return;
+  if (syncInFlight.has(tabId)) {
+    // A sync is already running (often blocked on DeepSeek). Re-run after it finishes
+    // so newer answers typed during the wait are not lost.
+    syncAgain.add(tabId);
+    return;
+  }
+  syncInFlight.add(tabId);
 
-  const state = await getTabState(tabId);
-  if (!state.isApplyPage) return;
-  if (!state.tabSessionId || !state.tabUrl) return;
-  if (!hostAllowed(state.tabUrl, settings.allowedHosts)) return;
-
-  const input_events = Object.values(state.pairs || {}).map((p) => ({
-    elementKey: p.elementKey || p.question || "",
-    value: p.value ?? p.answer ?? "",
-    eventType: p.eventType || "input",
-    timestamp: p.timestamp || p.updatedAt || Date.now(),
-    tagName: p.tagName || "",
-    inputType: p.inputType || p.fieldType || "",
-    elementId: p.elementId || "",
-    name: p.name || p.fieldName || "",
-    className: p.className || "",
-    cssSelector: p.cssSelector || "",
-    attributes: p.attributes || undefined,
-    label: p.label || p.question || undefined,
-    autocomplete: p.autocomplete || undefined,
-  }));
-
-  // Allow empty flush once so session exists; usually has buffered events.
   try {
-    await syncApplicationQa({
-      tab_url: state.tabUrl,
-      tab_session_id: state.tabSessionId,
-      page_title: state.pageTitle || undefined,
-      status: state.paused ? "paused" : "recording",
-      input_events,
+    const settings = await getSettings();
+    if (!settings.recordingEnabled || !settings.consentAccepted) return;
+    if (!settings.apiKey?.trim()) return;
+
+    const state = await getTabState(tabId);
+    if (!state.isApplyPage) return;
+    if (!state.tabSessionId || !state.tabUrl) return;
+    if (!hostAllowed(state.tabUrl, settings.allowedHosts)) return;
+
+    const snapshotValues = {};
+    const input_events = Object.values(state.pairs || {}).map((p) => {
+      const key = p.elementKey || p.question || "";
+      const value = p.value ?? p.answer ?? "";
+      snapshotValues[key] = value;
+      const cached = state.matchCache?.[key];
+      const ev = {
+        elementKey: key,
+        value,
+        eventType: p.eventType || p.actionType || "input",
+        actionType: p.actionType || p.eventType || "input",
+        componentType: p.componentType || p.inputType || p.fieldType || "",
+        timestamp: p.timestamp || p.updatedAt || Date.now(),
+        tagName: p.tagName || "",
+        inputType: p.inputType || p.fieldType || "",
+        elementId: p.elementId || "",
+        name: p.name || p.fieldName || "",
+        className: p.className || "",
+        cssSelector: p.cssSelector || "",
+        attributes: p.attributes || undefined,
+        label: p.label || p.question || undefined,
+        autocomplete: p.autocomplete || undefined,
+        triggeredOuterHTML: p.triggeredOuterHTML || undefined,
+      };
+      if (cached?.question || p.cachedQuestion) {
+        ev.cachedQuestion = cached?.question || p.cachedQuestion;
+        ev.cachedConfidence = cached?.confidence ?? p.cachedConfidence;
+      } else if (p.domContext) {
+        // First-time match only — keep BFS context until matched.
+        ev.domContext = p.domContext;
+      }
+      return ev;
     });
-    state.flushedOnce = true;
-    await setTabState(tabId, state);
-  } catch (err) {
-    console.warn("[devora21-qa] sync failed:", err?.message || err);
+
+    try {
+      const result = await syncApplicationQa({
+        tab_url: state.tabUrl,
+        tab_session_id: state.tabSessionId,
+        page_title: state.pageTitle || undefined,
+        status: state.paused ? "paused" : "recording",
+        input_events,
+      });
+
+      // Re-load tab state AFTER the await — never write back the pre-AI snapshot
+      // (that race was wiping newer answers like "rt" with an older empty value).
+      const latest = await getTabState(tabId);
+      latest.flushedOnce = true;
+      latest.matchCache = latest.matchCache || {};
+      for (const entry of result?.matchCache || []) {
+        if (
+          entry?.elementKey &&
+          entry.matchStatus === "matched" &&
+          entry.question
+        ) {
+          latest.matchCache[entry.elementKey] = {
+            question: entry.question,
+            confidence: entry.confidence ?? 0.9,
+          };
+        }
+      }
+      // Keep domContext until the field is matched — so a later non-empty value
+      // can still be matched if the first sync raced with an empty value.
+      for (const key of Object.keys(latest.pairs || {})) {
+        if (latest.pairs[key]?.domContext && latest.matchCache?.[key]?.question) {
+          delete latest.pairs[key].domContext;
+        }
+      }
+      await setTabState(tabId, latest);
+
+      // If the user typed while DeepSeek was running, queue another sync.
+      let dirty = syncAgain.has(tabId);
+      syncAgain.delete(tabId);
+      for (const [key, pair] of Object.entries(latest.pairs || {})) {
+        const now = String(pair.value ?? pair.answer ?? "");
+        const sent = String(snapshotValues[key] ?? "");
+        if (now !== sent) dirty = true;
+      }
+      if (dirty) scheduleSync(tabId);
+
+      try {
+        await chrome.tabs.sendMessage(tabId, {
+          type: "MATCH_CACHE_UPDATE",
+          entries: result?.matchCache || [],
+        });
+      } catch {
+        // content script may be absent on restricted pages
+      }
+    } catch (err) {
+      console.warn("[devora21-qa] sync failed:", err?.message || err);
+      // Allow retry of values that never reached the server.
+      syncAgain.add(tabId);
+    }
+  } finally {
+    syncInFlight.delete(tabId);
+    if (syncAgain.has(tabId)) {
+      syncAgain.delete(tabId);
+      scheduleSync(tabId);
+    }
   }
 }
 
@@ -378,10 +461,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      const cached = state.matchCache?.[elementKey];
       state.pairs[elementKey] = {
         elementKey,
         value,
-        eventType: message.eventType || "input",
+        eventType: message.eventType || message.actionType || "input",
+        actionType: message.actionType || message.eventType || "input",
+        componentType:
+          message.componentType || message.inputType || message.fieldType || "",
         timestamp: message.timestamp || Date.now(),
         tagName: message.tagName || "",
         inputType: message.inputType || message.fieldType || "",
@@ -392,11 +479,79 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         attributes: message.attributes || {},
         label: message.label || elementKey,
         autocomplete: message.autocomplete || "",
+        triggeredOuterHTML: message.triggeredOuterHTML || undefined,
         updatedAt: Date.now(),
+        ...(message.domContext ? { domContext: message.domContext } : {}),
+        ...(message.cachedQuestion
+          ? {
+              cachedQuestion: message.cachedQuestion,
+              cachedConfidence: message.cachedConfidence,
+            }
+          : cached
+            ? {
+                cachedQuestion: cached.question,
+                cachedConfidence: cached.confidence,
+              }
+            : {}),
       };
+
+      const inspection =
+        message.inspection || message.domContext?.inspection || null;
+      if (inspection) {
+        state.lastInspection = inspection;
+      }
+
+      // Snapshot of what DeepSeek receives (no inspection tree).
+      let lastDomContextAi = state.lastDomContextAi || null;
+      if (message.domContext && typeof message.domContext === "object") {
+        const ctx = message.domContext;
+        const nearby = Array.isArray(ctx.nearbyElements)
+          ? ctx.nearbyElements.slice(0, 5).map((n) => ({
+              distance: n.distance ?? 0,
+              relationship: n.relationship || "",
+              tagName: n.tagName || "",
+              textPreview: String(n.textPreview || "").slice(0, 240),
+              outerHTML: String(n.outerHTML || "").slice(0, 12_000),
+            }))
+          : [];
+        lastDomContextAi = {
+          actionType: message.actionType || ctx.actionType || "",
+          componentType:
+            message.componentType ||
+            ctx.componentType ||
+            ctx.element?.componentType ||
+            "",
+          value: String(message.value ?? ctx.valuePreview ?? "").slice(0, 500),
+          pageTitle: ctx.pageTitle || message.pageTitle || "",
+          triggeredOuterHTML: String(
+            ctx.triggeredOuterHTML || message.triggeredOuterHTML || ""
+          ).slice(0, 12_000),
+          element: ctx.element || {},
+          nearbyElements: nearby,
+          visitedCount: ctx.visitedCount ?? nearby.length,
+          capturedAt: Date.now(),
+        };
+        state.lastDomContextAi = lastDomContextAi;
+      }
+
       state.tabUrl = tabUrl;
       state.pageTitle = message.pageTitle || state.pageTitle || "";
       await setTabState(tabId, state);
+
+      if (inspection || lastDomContextAi) {
+        try {
+          chrome.runtime
+            .sendMessage({
+              type: "INSPECTION_UPDATED",
+              tabId,
+              inspection: inspection || state.lastInspection || null,
+              domContextAi: lastDomContextAi,
+            })
+            .catch(() => {});
+        } catch {
+          // sidepanel may be closed
+        }
+      }
 
       if (state.isApplyPage) {
         scheduleSync(tabId);
@@ -407,6 +562,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         buffered: !state.isApplyPage,
         synced: Boolean(state.isApplyPage),
         count: Object.keys(state.pairs).length,
+        cachedQuestion:
+          message.cachedQuestion || cached?.question || undefined,
+        cachedConfidence:
+          message.cachedConfidence ?? cached?.confidence ?? undefined,
+      });
+      return;
+    }
+
+    if (message?.type === "GET_LAST_INSPECTION") {
+      const tabId = message.tabId ?? sender.tab?.id;
+      if (tabId == null) {
+        sendResponse({ ok: false });
+        return;
+      }
+      const state = await getTabState(tabId);
+      sendResponse({
+        ok: true,
+        inspection: state.lastInspection || null,
+        domContextAi: state.lastDomContextAi || null,
       });
       return;
     }

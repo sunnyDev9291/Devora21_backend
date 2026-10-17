@@ -92,11 +92,14 @@ model ApplicationQaItem {
   id          String   @id @default(uuid())
   sessionId   String   @map("session_id")
   /**
-   * Stable element key within a session (DOM identity — not a human "question").
+   * Stable element key within a session (DOM identity).
    * Column name kept as question_key for backward-compatible DB mapping.
    */
   questionKey String   @map("question_key")
-  /** Human-readable element summary (tag/type/#id/[name]). */
+  /**
+   * Display question: DeepSeek-matched application question when matchStatus=matched;
+   * otherwise the element label / summary (unmatched DOM event).
+   */
   question    String   @db.Text
   /** Current input value for this element. */
   answer      String   @db.Text
@@ -112,6 +115,14 @@ model ApplicationQaItem {
   attributes  Json?
   /** Client event time (ms epoch or ISO stored as DateTime). */
   occurredAt  DateTime? @map("occurred_at")
+  /** matched | unmatched — AI question identification result. */
+  matchStatus String   @default("unmatched") @map("match_status")
+  /** 0–1 confidence from DeepSeek when matched. */
+  matchConfidence Float? @map("match_confidence")
+  /** Raw element summary (always kept even after AI match). */
+  elementLabel String? @map("element_label") @db.Text
+  /** Sanitized semantic DOM context used for matching (optional). */
+  domContext  Json?    @map("dom_context")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -120,6 +131,7 @@ model ApplicationQaItem {
   @@unique([sessionId, questionKey])
   @@index([sessionId])
   @@index([sessionId, occurredAt])
+  @@index([sessionId, matchStatus])
   @@map("application_qa_items")
 }
 

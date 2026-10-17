@@ -38,6 +38,8 @@ export async function getTabState(tabId) {
       hasResumeUpload: false,
       /** Local Q&A buffer exists before Apply Page; flushed on detect. */
       flushedOnce: false,
+      /** elementKey → { question, confidence } from DeepSeek match. */
+      matchCache: {},
     }
   );
 }

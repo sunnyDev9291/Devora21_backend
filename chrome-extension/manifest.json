@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Devora21 Application Q&A Recorder",
-  "version": "1.5.0",
+  "version": "2.1.10",
   "description": "Capture job application questions and answers per browser tab and sync securely to Devora21.",
   "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
   "host_permissions": ["http://*/*", "https://*/*"],
