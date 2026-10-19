@@ -26,9 +26,9 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
     }`;
 
   return [
-    "JSON OUTPUT SHAPE (structural only — content follows the profile writing prompt):",
+    "JSON OUTPUT CONTRACT (mandatory structure):",
     "Return ONLY one valid JSON object (no markdown fences, no commentary).",
-    "Use EXACTLY these top-level keys:",
+    "Exact top-level keys:",
     "{",
     '  "title": "<non-empty string>",',
     '  "summary": "<non-empty string>",',
@@ -37,10 +37,10 @@ export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bulle
     `  "experiences": [ ${experienceShape} ]`,
     "}",
     "You write: title, summary, skills, fileName, and experience bullets (or project field text).",
-    "Company/role come from the PROFILE WRITING PROMPT. dates must match template company_period strings (render match key).",
-    "Only bullets (or project narrative fields) are new writing for the DOCX; headers stay in the template.",
+    "Company/role come from PROFILE WRITING PROMPT. dates must match template company_period strings.",
+    "Only bullets (or project narrative fields) are new DOCX writing; headers stay in the template.",
     layout === "bullets"
-      ? "HARD RULE: each experiences[i].bullets array length MUST equal that job's template bullet count (see slots list). Every bullet string non-empty."
+      ? "HARD RULE: each experiences[i].bullets.length MUST equal that job's template bullet count. Every bullet non-empty."
       : "HARD RULE: each experience's projects array must match the frozen project names/count.",
     '"skills" must be one string (newlines for category lines).',
     "Do not nest title/summary/skills under personalInfo or content.",

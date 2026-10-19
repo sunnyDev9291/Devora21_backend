@@ -3,7 +3,12 @@ import { extractFileNamePatternFromPrompt } from "./filename";
 import { resumeJsonOutputContract } from "./output-contract";
 
 /**
- * AI writes ONLY: title, summary, skills, experience bullets, fileName.
+ * Priority (highest → lowest) when instructions conflict:
+ * 1) JSON shape + template slot counts (backend)
+ * 2) PROFILE WRITING PROMPT (wording, company meta, tone)
+ * 3) Job description (tailoring target)
+ *
+ * AI writes ONLY: title, summary, skills, experience bullets/projects, fileName.
  * Company/role/dates meta comes from the PROFILE WRITING PROMPT.
  * DOCX company_period / company_info headers are never overwritten on render.
  */
@@ -12,17 +17,32 @@ export function buildResumeSystemPrompt(
   profilePrompt: string
 ): string {
   return [
-    "You generate ONLY these resume fields: title, summary, skills, experience bullets, fileName.",
-    "Do NOT invent or change header_name, header_title, name, email, phone, LinkedIn, or education — those stay in the DOCX.",
-    "Company name, role, and employment dates MUST come from the PROFILE WRITING PROMPT (work history / company meta),",
-    "NOT from sample text in the DOCX template.",
-    "On render, company_period / company_info in the DOCX stay unchanged; only experience bullets are written into slots.",
-    "Skill category COUNT and bullet COUNT per job are FIXED by the template structure below.",
-    "CRITICAL: For every experience, bullets.length MUST equal that job's template bullet count.",
-    "Write that many NEW bullets yourself — never fewer, never more, never empty strings.",
-    "Follow the PROFILE WRITING PROMPT for wording/tone and for which companies/roles/dates to use.",
+    "You are generating Mode-1 resume CONTENT for a styled DOCX template.",
     "",
-    "===== PROFILE WRITING PROMPT (absolute for wording + company meta) =====",
+    "PRIORITY when rules conflict:",
+    "1) This system contract + template slot counts (mandatory).",
+    "2) PROFILE WRITING PROMPT (wording, company meta, tone).",
+    "3) Job description (what to emphasize for this application).",
+    "",
+    "OUTPUT MODE:",
+    "- Return ONE JSON object only (no markdown, no preface, no postscript).",
+    "- Write ONLY: title, summary, skills, fileName, experiences[].bullets (or projects fields).",
+    "- Do NOT invent or change contact/header/education fields — they stay in the DOCX.",
+    "",
+    "TRUTH / GROUNDING:",
+    "- Company name, role, and employment period MUST come from PROFILE WRITING PROMPT company meta.",
+    "- Do NOT invent employers, titles, or dates outside that meta.",
+    "- Tailor bullets/skills to the JD, but keep work grounded in each company's industry/projects from the meta.",
+    "- If the JD stack differs from the candidate's history, map transferable work honestly — do not claim deep expertise the meta cannot support.",
+    "",
+    "TEMPLATE HARD CONSTRAINTS:",
+    "- Skill category LINE COUNT and per-job bullet COUNT are fixed by the user-message slot list.",
+    "- For every experience, bullets.length MUST equal that job's template bullet count.",
+    "- Every bullet must be a non-empty string.",
+    "- experiences[i].dates MUST equal the template company_period string exactly (render match key).",
+    "- On render, DOCX company_period / company_info stay unchanged; only new bullet text is filled.",
+    "",
+    "===== PROFILE WRITING PROMPT (wording + company meta) =====",
     profilePrompt.trim(),
     "===== END PROFILE WRITING PROMPT =====",
     "",
@@ -48,22 +68,29 @@ export function buildResumeUserPrompt(input: {
 }): string {
   const blocks: string[] = [];
 
-  blocks.push(`Target job title (for tailoring):\n${input.jobTitle}`);
-  blocks.push(`Job description:\n${input.jobDescription || ""}`);
+  blocks.push(
+    [
+      "TARGET APPLICATION",
+      `Job title: ${input.jobTitle}`,
+      "Job description (tailor to this; ignore recruiter chat fluff if present):",
+      input.jobDescription || "(none provided)",
+    ].join("\n")
+  );
 
   const skillSlots = countSkillCategorySlots(input.skillsSample);
   if (input.layout === "bullets") {
     blocks.push(
       [
-        `Template skill slots (FIXED): exactly ${skillSlots} "Label: items" line(s) in skills.`,
-        "Rewrite category labels/items for this job; do not change the line count.",
+        "TEMPLATE SKILL SLOTS (FIXED)",
+        `Return skills as exactly ${skillSlots} newline-separated lines in the form "Category: item, item, …".`,
+        "You may rename categories and rewrite items for this JD; do not change the line count.",
       ].join("\n")
     );
   }
 
   const namePattern = extractFileNamePatternFromPrompt(input.customPrompt);
   if (namePattern) {
-    blocks.push(`File name pattern from profile prompt:\n${namePattern}`);
+    blocks.push(`FILE NAME HINT FROM PROFILE PROMPT:\n${namePattern}`);
   }
 
   if (input.layout === "projects") {
@@ -73,10 +100,10 @@ export function buildResumeUserPrompt(input: {
     });
     blocks.push(
       [
-        `Template experience slots (${input.jobs.length}) — match by dates (company_period):`,
+        `TEMPLATE EXPERIENCE SLOTS (${input.jobs.length}) — match by dates (company_period)`,
         structureLines.join("\n"),
         "Company/role/dates CONTENT comes from the PROFILE WRITING PROMPT.",
-        `Set each experience.dates to the matching template period string (exact).`,
+        "Set each experience.dates to the matching template period string (exact).",
         `Return exactly ${input.jobs.length} experience entries (project field text only).`,
       ].join("\n")
     );
@@ -89,21 +116,23 @@ export function buildResumeUserPrompt(input: {
       .join(", ");
     blocks.push(
       [
-        `Template experience slots (${input.jobs.length}) — MATCH KEY is dates (company_period in the DOCX):`,
+        `TEMPLATE EXPERIENCE SLOTS (${input.jobs.length}) — MATCH KEY is dates (company_period)`,
         structureLines.join("\n"),
-        "Company name / role / employment story: take from the PROFILE WRITING PROMPT, not from the template sample text.",
-        "For each slot: set experiences[i].dates to that slot's dates string EXACTLY (needed to place bullets on render).",
-        "Fill company and role from the profile prompt meta that belongs to that period.",
+        "Company name / role: from PROFILE WRITING PROMPT meta for that period.",
+        "For each slot: set experiences[i].dates to that slot's dates string EXACTLY.",
         `Return exactly ${input.jobs.length} experience entries.`,
         `HARD RULE: ${countSummary}.`,
-        "You must AUTHOR each bullet (non-empty). Do not omit bullets or return a shorter array.",
-        "Write ONLY new bullets for each slot. Do not change company_period / company_info in the document (render leaves them alone).",
+        "Author every bullet (non-empty). Do not shorten arrays.",
+        "Write ONLY new bullets; do not rewrite company_period / company_info (render leaves them alone).",
       ].join("\n")
     );
   }
 
   blocks.push(
-    "Also return: title (resume headline), summary, skills, optional fileName."
+    [
+      "RETURN",
+      "JSON only with keys: title, summary, skills, fileName (optional), experiences.",
+    ].join("\n")
   );
 
   return blocks.filter((b) => b.trim()).join("\n\n");
