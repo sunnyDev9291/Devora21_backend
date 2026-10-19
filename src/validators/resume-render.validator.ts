@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { coerceSkillsToLines } from "../lib/resume/skills-object";
 
 const resumeProjectSchema = z.object({
   name: z.string(),
@@ -17,10 +18,19 @@ const resumeExperienceSchema = z.object({
   projects: z.array(resumeProjectSchema).optional().default([]),
 });
 
+/** AI/FE may send skills as object { Cat: ["a","b"] } or legacy "Cat: a, b" string. */
+const skillsFieldSchema = z.preprocess((value) => {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return coerceSkillsToLines(value);
+  }
+  return value;
+}, z.string().trim().min(1, "content.skills is required"));
+
 const generatedResumeContentSchema = z.object({
   title: z.string().trim().min(1, "content.title is required"),
   summary: z.string().trim().min(1, "content.summary is required"),
-  skills: z.string().trim().min(1, "content.skills is required"),
+  skills: skillsFieldSchema,
   layout: z.enum(["bullets", "projects"]).optional(),
   fileName: z.string().trim().optional(),
   experiences: z

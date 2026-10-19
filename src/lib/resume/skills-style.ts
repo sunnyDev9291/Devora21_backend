@@ -55,7 +55,7 @@ export function collectSkillTermsFromSkillsBlock(skills: string): string[] {
     const value = colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
     // Split only on commas/semicolons — NEVER on "/" or "|"
     // (otherwise "A/B Testing" becomes term "A" and bolds every standalone A).
-    for (const part of value.split(/[,;]/)) {
+    for (const part of value.split(/[,;·•|/]+/)) {
       const t = part.replace(/\*\*/g, "").trim();
       if (isBoldableSkillTerm(t)) terms.push(t);
     }

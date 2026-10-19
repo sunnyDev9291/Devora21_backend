@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 *.log
+tmp/
 .DS_Store
 storage/*
 !storage/.gitkeep

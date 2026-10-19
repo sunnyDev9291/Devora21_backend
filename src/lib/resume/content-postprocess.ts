@@ -12,6 +12,10 @@ import {
 } from "./skills-style";
 import { resolveResumeFileName } from "./filename";
 import { normalizeResumeAiJson } from "./normalize-ai-json";
+import {
+  countSkillItemsInSkillsBlock,
+  extractSkillItemCountRange,
+} from "./prompt";
 import { stripMarkdownBoldMarkers } from "./xml-utils";
 
 function asString(v: unknown): string {
@@ -223,6 +227,17 @@ export function applyContentPostProcess(
 
   next.skills = formatSkillsToTemplateStyle(next.skills, opts.skillsSample, opts.layout);
   next.skills = fitSkillsToTemplateSlotCount(next.skills, opts.skillsSample);
+
+  // Soft check — item totals are enforced via user-prompt HARD RULE, not auto-padded.
+  const skillItemRange = extractSkillItemCountRange(opts.customPrompt);
+  if (skillItemRange) {
+    const n = countSkillItemsInSkillsBlock(next.skills);
+    if (n < skillItemRange.min || n > skillItemRange.max) {
+      console.warn(
+        `[resume] skills item count=${n}; profile requires ${skillItemRange.min}–${skillItemRange.max}`
+      );
+    }
+  }
 
   const skillTerms = collectSkillTermsFromSkillsBlock(next.skills);
   // Keyword bold (**term**) only in experience bullet sentences at render time.

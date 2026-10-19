@@ -1,8 +1,13 @@
 import { extractJsonObject, parseJsonLenient } from "./json-repair";
+import {
+  coerceSkillsToLines,
+  coerceSkillsToObject,
+  normalizeSkillsObject,
+} from "./skills-object";
 
 /**
  * Coerce model values into a single display string.
- * Models often return skills as string[] or { Category: "a, b" }.
+ * Models often return skills as string[] or { Category: ["a", "b"] }.
  */
 export function coerceTextField(value: unknown): string {
   if (value == null) return "";
@@ -18,6 +23,11 @@ export function coerceTextField(value: unknown): string {
     return parts.join(short ? ", " : "\n");
   }
   if (typeof value === "object") {
+    // Prefer skills-object shape: { Cat: ["a", "b"] } → "Cat: a, b"
+    const asSkills = normalizeSkillsObject(value);
+    if (asSkills && Object.keys(asSkills).length > 0) {
+      return coerceSkillsToLines(asSkills);
+    }
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.length === 0) return "";
     return entries
@@ -119,20 +129,26 @@ export function normalizeResumeAiJson(
       ? pickCoerced(personal, ["summary", "professionalSummary", "about", "profile"])
       : "");
 
-  let skills = pickCoerced(root, [
-    "skills",
-    "skillsets",
-    "skillSets",
-    "skillsSummary",
-    "skill_summary",
-    "technologies",
-    "techStack",
-    "tech_stack",
-  ]);
+  let skillsRaw: unknown =
+    root.skills ??
+    root.skillsets ??
+    root.skillSets ??
+    root.skillsSummary ??
+    root.skill_summary ??
+    root.technologies ??
+    root.techStack ??
+    root.tech_stack;
 
   // skills sometimes only under nested personal block
-  if (!skills && personal) {
-    skills = pickCoerced(personal, ["skills", "skillsets", "technologies"]);
+  if (skillsRaw == null && personal) {
+    skillsRaw =
+      personal.skills ?? personal.skillsets ?? personal.technologies;
+  }
+
+  // Canonical internal form for DOCX: "Cat: a, b" lines (object AI shape coerced).
+  let skills = coerceSkillsToLines(skillsRaw);
+  if (!skills) {
+    skills = pickCoerced(root, ["skills", "skillsets", "technologies"]);
   }
 
   const experiences = Array.isArray(root.experiences)
@@ -188,10 +204,14 @@ export function normalizeResumeAiJson(
 
 /** Serialize normalized resume fields for the frontend (guaranteed keys). */
 export function toFrontendResumeJson(normalized: ReturnType<typeof normalizeResumeAiJson>): string {
+  // FE expects skills as { Category: string[] } (AI contract). Lines kept for DOCX path.
+  const skillsObject = coerceSkillsToObject(
+    normalized.raw.skills ?? normalized.skills
+  );
   const out: Record<string, unknown> = {
     title: normalized.title,
     summary: normalized.summary,
-    skills: normalized.skills,
+    skills: Object.keys(skillsObject).length ? skillsObject : normalized.skills,
   };
   if (normalized.fileName) out.fileName = normalized.fileName;
   if (normalized.experiences) out.experiences = normalized.experiences;

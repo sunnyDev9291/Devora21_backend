@@ -107,7 +107,7 @@ function splitItemsAcrossSlots(itemsText: string, slotCount: number): string[] {
 
   const perSlot = Math.ceil(parts.length / slotCount);
   for (let i = 0; i < slotCount; i += 1) {
-    out[i] = parts.slice(i * perSlot, (i + 1) * perSlot).join(" • ");
+    out[i] = parts.slice(i * perSlot, (i + 1) * perSlot).join(" · ");
   }
   return out;
 }

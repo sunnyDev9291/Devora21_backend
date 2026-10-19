@@ -1,9 +1,7 @@
 import { AppError } from "../middleware/errorHandler";
+import { writeLastResumeAiPayloadLog } from "../lib/resume/debug-payload-log";
 import { parseResumeTemplate } from "../lib/resume/parse-template";
-import {
-  buildResumeSystemPrompt,
-  buildResumeUserPrompt,
-} from "../lib/resume/prompt";
+import { buildResumeUserPrompt } from "../lib/resume/prompt";
 import { resolveWritingPrompt } from "../lib/resume/resolve-writing-prompt";
 import type { ParsedResumeTemplate } from "../lib/resume/types";
 import {
@@ -28,8 +26,7 @@ export type ResumeGeneratePromptBundle = {
  * - Web UI: POST /ai/chat/completions (jsonObject:true)
  * - One-click: POST /resume/from-job (after scrape)
  *
- * Loads stored DOCX → structure (per-job bulletCount, skill categories) →
- * profile writing prompt + JD → Claude messages.
+ * Single user message: Job title → JD → template slot counts → profile prompt → JSON shape.
  * FE messages are not used for resume generation.
  */
 export async function buildResumeGeneratePrompt(input: {
@@ -84,10 +81,6 @@ export async function buildResumeGeneratePrompt(input: {
     context: input.context,
   });
 
-  const system = buildResumeSystemPrompt(
-    parsedTemplate.layout,
-    resolved.content
-  );
   const user = buildResumeUserPrompt({
     jobTitle: jobTitle || "Target role",
     jobDescription,
@@ -98,16 +91,27 @@ export async function buildResumeGeneratePrompt(input: {
   });
 
   const profileName = parsedTemplate.profileName?.trim() || "Candidate";
+  const messages: ResumeGeneratePromptBundle["messages"] = [
+    { role: "user", content: user },
+  ];
 
   console.log(
-    `[resume/generate] context=${input.context} templateId=${storedTemplate.templateId} jobs=${parsedTemplate.jobs.length} bullets=${parsedTemplate.jobs.map((j) => j.bulletCount).join(",")} skillLines=${parsedTemplate.skillsSample.split(/\r?\n/).filter(Boolean).length}`
+    `[resume/generate] context=${input.context} templateId=${storedTemplate.templateId} jobs=${parsedTemplate.jobs.length} bullets=${parsedTemplate.jobs.map((j) => j.bulletCount).join(",")} skillLines=${parsedTemplate.skillsSample.split(/\r?\n/).filter(Boolean).length} promptMode=single-user`
   );
 
+  writeLastResumeAiPayloadLog({
+    at: new Date().toISOString(),
+    context: input.context,
+    userId: input.userId,
+    jobTitle: jobTitle || "Target role",
+    jobDescriptionChars: jobDescription.length,
+    templateId: storedTemplate.templateId,
+    writingPromptSource: resolved.source,
+    messages,
+  });
+
   return {
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
+    messages,
     writingPrompt: resolved.content,
     writingPromptSource: resolved.source,
     storedTemplate,
