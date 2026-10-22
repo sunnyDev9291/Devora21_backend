@@ -1,9 +1,8 @@
-import { env, aiMockEnabled, deepseekEnabled } from "../config/env";
+import { aiMockEnabled, claudeEnabled } from "../config/env";
 import { logger } from "../lib/logger";
+import { getDefaultClaudeModel } from "../lib/claude-models";
+import { createChatCompletion } from "./claude.service";
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
-const DEEPSEEK_MODEL = "deepseek-v4-pro";
-const DEEPSEEK_TIMEOUT_MS = 45_000;
 /** Minimum confidence to accept an AI-identified question. */
 export const QA_MATCH_MIN_CONFIDENCE = 0.55;
 
@@ -221,7 +220,8 @@ function buildPayload(ctx: DomMatchContext) {
 }
 
 /**
- * Identify the application question for a form control via DeepSeek (BFS context).
+ * Identify the application question for a form control via Claude Haiku 5.5 (BFS context).
+ * Export name kept for callers; implementation no longer uses DeepSeek.
  */
 export async function matchApplicationQuestionWithDeepSeek(
   ctx: DomMatchContext
@@ -241,14 +241,14 @@ export async function matchApplicationQuestionWithDeepSeek(
     );
   }
 
-  if (!deepseekEnabled || !env.DEEPSEEK_API_KEY) {
+  if (!claudeEnabled) {
     return (
       heuristic || {
         matched: false,
         question: "",
         answer: fallbackValue,
         confidence: 0,
-        reason: "deepseek_not_configured",
+        reason: "claude_not_configured",
       }
     );
   }
@@ -256,49 +256,19 @@ export async function matchApplicationQuestionWithDeepSeek(
   const payload = buildPayload(ctx);
 
   try {
-    const response = await fetch(DEEPSEEK_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Match this form action to its application question.\n${JSON.stringify(payload)}`,
-          },
-        ],
-        max_tokens: 512,
-        response_format: { type: "json_object" },
-        thinking: { type: "disabled" },
-      }),
-      signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
+    const { content } = await createChatCompletion({
+      model: getDefaultClaudeModel(),
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Match this form action to its application question.\n${JSON.stringify(payload)}`,
+        },
+      ],
+      maxTokens: 512,
+      jsonObject: true,
     });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      logger.warn("application-qa", "DeepSeek match HTTP error", {
-        status: response.status,
-        body: text.slice(0, 200),
-      });
-      return (
-        heuristic || {
-          matched: false,
-          question: "",
-          answer: fallbackValue,
-          confidence: 0,
-          reason: `deepseek_http_${response.status}`,
-        }
-      );
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content;
     if (!content) {
       return (
         heuristic || {
@@ -306,7 +276,7 @@ export async function matchApplicationQuestionWithDeepSeek(
           question: "",
           answer: fallbackValue,
           confidence: 0,
-          reason: "deepseek_empty",
+          reason: "claude_empty",
         }
       );
     }
@@ -318,7 +288,7 @@ export async function matchApplicationQuestionWithDeepSeek(
     }
     return ai;
   } catch (err) {
-    logger.warn("application-qa", "DeepSeek match failed", {
+    logger.warn("application-qa", "Claude match failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return (
@@ -327,7 +297,7 @@ export async function matchApplicationQuestionWithDeepSeek(
         question: "",
         answer: fallbackValue,
         confidence: 0,
-        reason: "deepseek_error",
+        reason: "claude_error",
       }
     );
   }

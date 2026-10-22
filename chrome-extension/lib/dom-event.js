@@ -138,6 +138,220 @@
     }
   }
 
+  /** Common closed-state labels that are NOT real answers. */
+  const DROPDOWN_PLACEHOLDER_RE =
+    /^(not\s*selected|select(\s+(an?\s+)?(option|one|item|value|country|location|city|state|province))?|choose(\s+(an?\s+)?(option|one))?|pick(\s+(an?\s+)?(option|one))?|suggestions?|search(\s+here)?|please\s+select|—+|–+|-+|\.{3}|n\/?a|none|empty)$/i;
+
+  function isPlaceholderDropdownValue(value) {
+    const v = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!v) return true;
+    if (v.length > 80) return false;
+    return DROPDOWN_PLACEHOLDER_RE.test(v);
+  }
+
+  /** Full option-list dumps (e.g. AfghanistanAlbaniaAlgeria…) are not answers. */
+  function isDropdownOptionDump(value) {
+    const v = String(value || "").trim();
+    if (!v) return false;
+    if (v.length > 220) return true;
+    const camelJoins = (v.match(/[a-z][A-Z]/g) || []).length;
+    if (camelJoins >= 3 && v.length > 40) return true;
+    // Many bare country-like tokens jammed without separators.
+    if (!/[\s,]/.test(v) && v.length > 60 && camelJoins >= 2) return true;
+    return false;
+  }
+
+  function isDateInputType(type) {
+    const t = String(type || "").toLowerCase();
+    return ["date", "datetime-local", "month", "week", "time"].includes(t);
+  }
+
+  function isDropdownControl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.tagName === "SELECT") return true;
+    const role = String(el.getAttribute?.("role") || "").toLowerCase();
+    if (role === "listbox" || role === "combobox") return true;
+    if (role === "option") return true;
+    if (el.getAttribute?.("aria-haspopup") === "listbox") return true;
+    if (el.getAttribute?.("aria-haspopup") === "dialog" && role === "combobox") {
+      return true;
+    }
+    return false;
+  }
+
+  function isComboboxTrigger(el) {
+    if (!el) return false;
+    const role = String(el.getAttribute?.("role") || "").toLowerCase();
+    if (role === "combobox") return true;
+    if (role === "option") return false;
+    if (
+      (el.tagName === "BUTTON" || role === "button") &&
+      el.getAttribute?.("aria-haspopup")
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function findOpenCombobox(root = document) {
+    try {
+      const nodes = root.querySelectorAll?.(
+        '[role="combobox"][aria-expanded="true"], [role="combobox"][data-state="open"]'
+      );
+      if (!nodes?.length) return null;
+      return nodes[nodes.length - 1] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function optionTextFromTarget(el) {
+    if (!el) return "";
+    const opt =
+      el.closest?.(
+        '[role="option"], [data-radix-collection-item], li[cmdk-item], [data-value]'
+      ) || el;
+    const role = String(opt.getAttribute?.("role") || "").toLowerCase();
+    if (
+      role === "option" ||
+      opt.hasAttribute?.("data-radix-collection-item") ||
+      opt.hasAttribute?.("cmdk-item") ||
+      opt.hasAttribute?.("data-value")
+    ) {
+      const dataVal = opt.getAttribute?.("data-value");
+      if (
+        dataVal &&
+        !isPlaceholderDropdownValue(dataVal) &&
+        !isDropdownOptionDump(dataVal)
+      ) {
+        return dataVal.trim();
+      }
+      const t = visibleText(opt).slice(0, 200);
+      if (t && !isPlaceholderDropdownValue(t) && !isDropdownOptionDump(t)) {
+        return t;
+      }
+    }
+    // Plain list rows in custom popovers (HireEZ / shadcn Command).
+    const inPopup = el.closest?.(
+      '[role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper], [cmdk-list], [data-state="open"]'
+    );
+    if (inPopup && el !== inPopup) {
+      const row =
+        el.closest?.("button, [role='option'], li, div[class*='cursor-pointer']") ||
+        el;
+      if (row && !isComboboxTrigger(row) && row.tagName !== "INPUT") {
+        const t = visibleText(row).slice(0, 200);
+        if (
+          t &&
+          t.length >= 2 &&
+          t.length <= 120 &&
+          !isPlaceholderDropdownValue(t) &&
+          !/^search$/i.test(t)
+        ) {
+          return t;
+        }
+      }
+    }
+    return "";
+  }
+
+  function readDropdownDisplayValue(el) {
+    if (!el) return "";
+    const pending = el.getAttribute?.("data-devora21-pending-value");
+    if (
+      pending &&
+      !isPlaceholderDropdownValue(pending) &&
+      !isDropdownOptionDump(pending)
+    ) {
+      return String(pending).trim();
+    }
+    if (el.tagName === "SELECT") {
+      const opts = Array.from(el.selectedOptions || []);
+      if (opts.length > 1) {
+        const joined = opts.map((o) => o.text || o.value).join(", ");
+        return isDropdownOptionDump(joined) ? "" : joined;
+      }
+      const text = el.options[el.selectedIndex]?.text || el.value || "";
+      if (isPlaceholderDropdownValue(text) || isDropdownOptionDump(text)) {
+        return "";
+      }
+      return text;
+    }
+    const ariaVal =
+      el.getAttribute?.("aria-valuetext") ||
+      el.getAttribute?.("data-value") ||
+      "";
+    if (
+      ariaVal &&
+      !isPlaceholderDropdownValue(ariaVal) &&
+      !isDropdownOptionDump(ariaVal)
+    ) {
+      return String(ariaVal).trim();
+    }
+    // Prefer the primary label span (closed combobox), not chevron/icon noise.
+    try {
+      const labelSpan = el.querySelector?.(
+        ":scope > span:not([aria-hidden]), :scope > div > span"
+      );
+      if (labelSpan) {
+        const t = visibleText(labelSpan);
+        if (isPlaceholderDropdownValue(t) || isDropdownOptionDump(t)) return "";
+        if (t) return t;
+      }
+    } catch {
+      // ignore
+    }
+    const raw = visibleText(el);
+    if (
+      !raw ||
+      isPlaceholderDropdownValue(raw) ||
+      isDropdownOptionDump(raw)
+    ) {
+      return "";
+    }
+    // Strip trailing chevron-only noise if present as separate words.
+    return raw.replace(/\s*[▼▾˅v]\s*$/i, "").trim();
+  }
+
+  /**
+   * Opening / focusing a closed combobox with only placeholder text is not an answer.
+   * Real answers come from option clicks or a non-placeholder display value.
+   */
+  function isDropdownOpenOnlyEvent(el, eventType) {
+    if (!el || !isDropdownControl(el)) return false;
+    if (String(el.getAttribute?.("role") || "").toLowerCase() === "option") {
+      return false;
+    }
+    const et = String(eventType || "").toLowerCase();
+    const expanded =
+      el.getAttribute?.("aria-expanded") === "true" ||
+      el.getAttribute?.("data-state") === "open";
+    const display = readDropdownDisplayValue(el);
+    if (isPlaceholderDropdownValue(display) || !String(display).trim()) {
+      if (
+        et === "click" ||
+        et === "pointerup" ||
+        et === "focusin" ||
+        et === "poll"
+      ) {
+        return true;
+      }
+      // While menu is open, trigger still shows placeholder — ignore.
+      if (expanded) return true;
+    }
+    // Re-clicking an already-filled trigger just reopens the menu.
+    if (
+      (et === "click" || et === "pointerup" || et === "focusin") &&
+      isComboboxTrigger(el) &&
+      expanded
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   /** Text from direct child text nodes only (not inherited from descendants). */
   function directText(el) {
     if (!el?.childNodes) return "";
@@ -667,12 +881,8 @@
     const type = (el.type || "").toLowerCase();
     if (type === "checkbox") return readCheckboxGroupValue(el);
     if (type === "radio") return readNativeRadioValue(el);
-    if (el.tagName === "SELECT") {
-      const opts = Array.from(el.selectedOptions || []);
-      if (opts.length > 1) {
-        return opts.map((o) => o.text || o.value).join(", ");
-      }
-      return el.options[el.selectedIndex]?.text || el.value || "";
+    if (el.tagName === "SELECT" || isDropdownControl(el)) {
+      return readDropdownDisplayValue(el);
     }
     if (type === "file") {
       const files = Array.from(el.files || []);
@@ -680,6 +890,10 @@
     }
     if (el.getAttribute?.("role") === "slider" || type === "range") {
       return String(el.value ?? el.getAttribute?.("aria-valuenow") ?? "");
+    }
+    // Native inputs keep .value; avoid treating button/combobox chrome text as answers.
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+      return el.value || "";
     }
     return el.value || visibleText(el) || "";
   }
@@ -786,10 +1000,30 @@
       if (native && isTrackableControl(native)) return native;
     }
 
+    // Popover/listbox option → owner combobox (HireEZ / shadcn / Radix).
+    const picked = optionTextFromTarget(el);
+    if (picked) {
+      const owner =
+        findOpenCombobox(document) ||
+        el
+          .closest?.("[data-field-path], .ashby-application-form-field-entry, form, [role='group']")
+          ?.querySelector?.(
+            '[role="combobox"], select, button[aria-haspopup]'
+          );
+      if (owner && isTrackableControl(owner)) {
+        try {
+          owner.setAttribute("data-devora21-pending-value", picked);
+        } catch {
+          // ignore
+        }
+        return owner;
+      }
+    }
+
     if (isTrackableControl(el)) return el;
 
     const nested = el.closest?.(
-      "input, textarea, select, button[data-option], [contenteditable='true'], [role='radio'], [role='checkbox'], [role='switch']"
+      "input, textarea, select, button[data-option], [contenteditable='true'], [role='radio'], [role='checkbox'], [role='switch'], [role='combobox']"
     );
     if (nested && isTrackableControl(nested)) return nested;
 
@@ -909,6 +1143,11 @@
           'input[type="radio"]:checked, input[type="checkbox"]:checked, [role="radio"][aria-checked="true"], [aria-pressed="true"]'
         )
         ?.forEach(add);
+      // Comboboxes that already show a real selection (skip placeholders).
+      root.querySelectorAll?.('[role="combobox"], select')?.forEach((el) => {
+        const v = readDropdownDisplayValue(el);
+        if (v && !isPlaceholderDropdownValue(v)) add(el);
+      });
     } catch {
       // ignore
     }
@@ -927,5 +1166,11 @@
     cssSelector,
     listActiveChoiceControls,
     componentTypeOf,
+    isPlaceholderDropdownValue,
+    isDropdownOptionDump,
+    isDropdownOpenOnlyEvent,
+    isDropdownControl,
+    isDateInputType,
+    readDropdownDisplayValue,
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

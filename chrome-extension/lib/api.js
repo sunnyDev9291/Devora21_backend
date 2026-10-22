@@ -29,30 +29,39 @@ async function request(path, options = {}) {
   return body;
 }
 
-export function syncApplicationQa(payload) {
-  return request("/extension/application-qa/sync", {
+export function fetchMe() {
+  return request("/extension/me");
+}
+
+export function uploadApplicationCapture(payload) {
+  return request("/extension/application-captures", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function fetchMe() {
-  return request("/extension/me");
+export function listCaptures(opts = {}) {
+  const page = opts.page || 1;
+  const limit = opts.limit || 20;
+  return request(
+    `/extension/application-captures?page=${page}&limit=${limit}`
+  );
 }
 
-export function listSessions() {
-  return request("/extension/application-qa/sessions");
+export function getCapture(id) {
+  return request(`/extension/application-captures/${id}`);
 }
 
-export function deleteSession(id) {
-  return request(`/extension/application-qa/sessions/${id}`, {
+export function deleteCapture(id) {
+  return request(`/extension/application-captures/${id}`, {
     method: "DELETE",
   });
 }
 
-export function patchSession(id, status) {
-  return request(`/extension/application-qa/sessions/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
+/** @deprecated legacy live Q&A */
+export function syncApplicationQa(payload) {
+  return request("/extension/application-qa/sync", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }

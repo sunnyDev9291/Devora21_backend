@@ -11,20 +11,14 @@ export type ClaudeModelCatalogEntry = {
   isDefault?: boolean;
 };
 
-/** Canonical default — must match FE (`claude-sonnet-4-6`). */
-export const FALLBACK_DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
+/** Sole allowlisted model for resume + AI helpers. */
+export const FALLBACK_DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5";
 
 /**
  * Server allowlist of Anthropic model ids the resume pipeline may call.
- * Add new versions here and to CLAUDE_MODEL_CATALOG when enabling them.
+ * Only Haiku 5.5 is enabled.
  */
-export const CLAUDE_MODEL_ALLOWLIST = [
-  "claude-haiku-4-5",
-  "claude-sonnet-4-5",
-  "claude-sonnet-4-6",
-  "claude-opus-4-5",
-  "claude-opus-4-6",
-] as const;
+export const CLAUDE_MODEL_ALLOWLIST = ["claude-haiku-5-5"] as const;
 
 export type AllowedClaudeModelId = (typeof CLAUDE_MODEL_ALLOWLIST)[number];
 
@@ -32,35 +26,11 @@ const ALLOWLIST_SET = new Set<string>(CLAUDE_MODEL_ALLOWLIST);
 
 export const CLAUDE_MODEL_CATALOG: ClaudeModelCatalogEntry[] = [
   {
-    id: "claude-haiku-4-5",
-    label: "Haiku 4.5",
+    id: "claude-haiku-5-5",
+    label: "Haiku 5.5",
     family: "haiku",
-    description: "Fastest · lower cost",
-  },
-  {
-    id: "claude-sonnet-4-5",
-    label: "Sonnet 4.5",
-    family: "sonnet",
-    description: "Balanced quality and speed",
-  },
-  {
-    id: "claude-sonnet-4-6",
-    label: "Sonnet 4.6",
-    family: "sonnet",
-    description: "Recommended for resume drafting",
+    description: "Fast · resume drafting and extraction",
     isDefault: true,
-  },
-  {
-    id: "claude-opus-4-5",
-    label: "Opus 4.5",
-    family: "opus",
-    description: "Highest quality · slower",
-  },
-  {
-    id: "claude-opus-4-6",
-    label: "Opus 4.6",
-    family: "opus",
-    description: "Highest quality · slower",
   },
 ];
 
@@ -89,12 +59,10 @@ export function isAllowedClaudeModel(modelId: string): boolean {
 
 /**
  * Resolve a request model id.
- * - missing / empty → default (claude-sonnet-4-6 or env)
- * - unknown → 400 (never silently remap to another family)
+ * - missing / empty → default (claude-haiku-5-5 or env)
+ * - unknown → 400 (never silently remap)
  */
-export function resolveClaudeModel(
-  raw?: string | null
-): string {
+export function resolveClaudeModel(raw?: string | null): string {
   const trimmed = typeof raw === "string" ? raw.trim() : "";
   if (!trimmed) {
     return getDefaultClaudeModel();
@@ -105,21 +73,47 @@ export function resolveClaudeModel(
   return trimmed;
 }
 
-/** Models that accept Anthropic `thinking: { type: "between_tools" }`. */
+/**
+ * Models that accept Anthropic `thinking: { type: "between_tools" }`.
+ * Haiku 5.5 rejects this parameter — only Sonnet/Opus 5.x support it.
+ */
 export function modelSupportsBetweenToolsThinking(modelId: string): boolean {
-  // Sonnet 5.5+ style ids; 4.x allowlisted models reject or ignore this.
-  return /claude-(?:sonnet|opus|haiku)-5(?:-\d+)?$/i.test(modelId.trim());
+  return /claude-(?:sonnet|opus)-5(?:-\d+)?$/i.test(modelId.trim());
 }
 
-/** Absolute max we ever request (supported on Sonnet/Opus 4.x+). */
+/**
+ * Haiku 5.5 defaults to adaptive (hidden) thinking — tokens appear only after
+ * that finishes. It accepts `thinking: { type: "disabled" }` at high effort
+ * or below so visible text can stream immediately.
+ */
+export function modelSupportsDisabledThinking(modelId: string): boolean {
+  return /claude-haiku-5(?:-\d+)?$/i.test(modelId.trim());
+}
+
+/**
+ * Anthropic `thinking` body field for resume/chat: turn off up-front reasoning
+ * so streamed JSON/text starts right away (no silent 30–60s delay).
+ */
+export function getClaudeThinkingConfig(
+  modelId: string
+): { type: "between_tools" } | { type: "disabled" } | undefined {
+  if (modelSupportsBetweenToolsThinking(modelId)) {
+    return { type: "between_tools" };
+  }
+  if (modelSupportsDisabledThinking(modelId)) {
+    return { type: "disabled" };
+  }
+  return undefined;
+}
+
+/** Absolute max we ever request (Haiku 5.5 supports up to 128k). */
 export const CLAUDE_MAX_OUTPUT_TOKENS_CEILING = 128_000;
 
-/** Haiku 4.5 Anthropic output ceiling. */
-export const CLAUDE_HAIKU_MAX_OUTPUT_TOKENS = 64_000;
+/** Haiku 5.5 Anthropic output ceiling. */
+export const CLAUDE_HAIKU_MAX_OUTPUT_TOKENS = 128_000;
 
 /**
  * Per-model Anthropic max_tokens ceiling.
- * Requesting above the model limit returns 400 (e.g. Haiku 4.5 → 64k).
  */
 export function getClaudeMaxOutputTokens(modelId: string): number {
   const id = modelId.trim().toLowerCase();

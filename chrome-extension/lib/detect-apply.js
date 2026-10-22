@@ -1,260 +1,307 @@
 /**
- * Detect job-application pages: must see BOTH an email input and a resume upload.
- * Scans light DOM + open shadow roots + same-origin iframes.
- * Cross-origin iframes are covered by content_scripts all_frames + background aggregation.
+ * Application page detection via configurable SUBMIT_BUTTON_TEXTS.
+ * Matches visible text / value / aria-label / title exactly (normalized).
+ * Marks via data attribute only. Capture-before-submit hooks unchanged.
+ *
+ * The live list is seeded with ["Submit"] and updated from chrome.storage
+ * (options UI) via setSubmitButtonTexts — do not hardcode comparisons elsewhere.
  */
 (function (global) {
-  function textBlob(el) {
-    if (!el) return "";
-    return [
-      el.name,
-      el.id,
-      el.className && String(el.className),
-      el.getAttribute?.("placeholder"),
-      el.getAttribute?.("aria-label"),
-      el.getAttribute?.("aria-labelledby"),
-      el.getAttribute?.("data-testid"),
-      el.getAttribute?.("data-qa"),
-      el.getAttribute?.("data-automation-id"),
-      el.getAttribute?.("data-field"),
-      el.getAttribute?.("data-name"),
-      el.getAttribute?.("accept"),
-      el.getAttribute?.("autocomplete"),
-      el.getAttribute?.("inputmode"),
-      el.getAttribute?.("title"),
-    ]
-      .filter(Boolean)
-      .join(" ")
+  const MARK_ATTR = "data-devora21-capture-submit";
+
+  /**
+   * Central list of submit-button labels.
+   * Default: ["Submit"]. Options UI add/edit/delete updates this at runtime.
+   * Matching is case-insensitive exact equality after trim / whitespace collapse.
+   */
+  const DEFAULT_SUBMIT_BUTTON_TEXTS = ["Submit"];
+  const SUBMIT_BUTTON_TEXTS = DEFAULT_SUBMIT_BUTTON_TEXTS.slice();
+
+  function normalizeLabel(s) {
+    return String(s || "")
+      .replace(/\s+/g, " ")
+      .trim()
       .toLowerCase();
   }
 
-  function resolveAriaLabelledBy(el) {
-    const ids = (el.getAttribute?.("aria-labelledby") || "").trim();
-    if (!ids || !el.ownerDocument) return "";
-    return ids
-      .split(/\s+/)
-      .map((id) => {
-        try {
-          const node = el.ownerDocument.getElementById(id);
-          return (node?.innerText || node?.textContent || "").trim();
-        } catch {
-          return "";
-        }
-      })
-      .filter(Boolean)
-      .join(" ");
-  }
-
-  function labelText(el) {
-    try {
-      if (el.getAttribute?.("aria-label")) return el.getAttribute("aria-label");
-      const aria = resolveAriaLabelledBy(el);
-      if (aria) return aria;
-      if (el.labels?.length) {
-        return Array.from(el.labels)
-          .map((l) => l.innerText || l.textContent || "")
-          .join(" ");
-      }
-      if (el.id) {
-        const lab = el.ownerDocument?.querySelector?.(
-          `label[for="${CSS.escape(el.id)}"]`
-        );
-        if (lab) return lab.innerText || lab.textContent || "";
-      }
-      const wrap = el.closest?.("label");
-      if (wrap) return wrap.innerText || wrap.textContent || "";
-    } catch {
-      // ignore
+  function sanitizeSubmitTexts(list) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of Array.isArray(list) ? list : []) {
+      const display = String(raw || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!display) continue;
+      const key = display.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(display);
     }
-    return "";
+    return out.length ? out : DEFAULT_SUBMIT_BUTTON_TEXTS.slice();
   }
 
-  function nearbyText(el, max = 600) {
+  /** Replace the live detection list (from storage / options UI). */
+  function setSubmitButtonTexts(list) {
+    const cleaned = sanitizeSubmitTexts(list);
+    SUBMIT_BUTTON_TEXTS.length = 0;
+    for (const t of cleaned) SUBMIT_BUTTON_TEXTS.push(t);
+    return SUBMIT_BUTTON_TEXTS.slice();
+  }
+
+  function getSubmitButtonTexts() {
+    return SUBMIT_BUTTON_TEXTS.slice();
+  }
+
+  /** Normalized allowlist — rebuilt from SUBMIT_BUTTON_TEXTS each call. */
+  function normalizedSubmitTexts() {
+    return SUBMIT_BUTTON_TEXTS.map(normalizeLabel).filter(Boolean);
+  }
+
+  /** Exact match against SUBMIT_BUTTON_TEXTS after normalization. */
+  function textMatchesSubmitList(raw) {
+    const n = normalizeLabel(raw);
+    if (!n) return false;
+    return normalizedSubmitTexts().includes(n);
+  }
+
+  function visibleText(el) {
     try {
-      const root =
-        el.closest?.(
-          "label,fieldset,section,li,td,tr,div[class*='field'],div[class*='Field'],div[class*='form'],div[class*='upload'],div[class*='Upload'],div[class*='drop'],form"
-        ) || el.parentElement;
-      const t = (root?.innerText || root?.textContent || "").trim();
-      return t.slice(0, max).toLowerCase();
+      return String(el?.innerText || el?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim();
     } catch {
       return "";
     }
   }
 
   /**
-   * Collect inputs from document + nested open shadow roots + same-origin iframes.
+   * All label-like strings for a control (visible text + relevant attributes).
+   * Any one matching SUBMIT_BUTTON_TEXTS counts.
    */
-  function collectInputs(root, out = [], depth = 0) {
-    if (!root || depth > 8) return out;
+  function controlLabelCandidates(el) {
+    if (!el) return [];
+    const out = [];
+    if (el.tagName === "INPUT") {
+      out.push(el.value);
+    } else {
+      out.push(visibleText(el));
+    }
+    out.push(el.getAttribute?.("value"));
+    out.push(el.getAttribute?.("aria-label"));
+    out.push(el.getAttribute?.("title"));
+    return out.filter((s) => s != null && String(s).trim() !== "");
+  }
+
+  /** Prefer visible text/value; fall back to aria-label / title. */
+  function controlLabel(el) {
+    const parts = controlLabelCandidates(el);
+    return parts.length ? normalizeLabel(parts[0]) : "";
+  }
+
+  /** True when normalized label exactly equals an entry in SUBMIT_BUTTON_TEXTS. */
+  function isSubmitLabel(label) {
+    return textMatchesSubmitList(label);
+  }
+
+  /** True when any visible text or relevant attribute matches the list. */
+  function controlMatchesSubmitList(el) {
+    return controlLabelCandidates(el).some(textMatchesSubmitList);
+  }
+
+  function isVisible(el) {
+    if (!el || el.nodeType !== 1) return false;
     try {
-      const nodes = root.querySelectorAll?.("input") || [];
-      for (const el of nodes) out.push(el);
-
-      const all = root.querySelectorAll?.("*") || [];
-      for (const el of all) {
-        if (el.shadowRoot) collectInputs(el.shadowRoot, out, depth + 1);
-      }
-
-      // Same-origin child frames (cross-origin throws; those rely on all_frames).
-      const frames = root.querySelectorAll?.("iframe, frame") || [];
-      for (const frame of frames) {
-        try {
-          const childDoc =
-            frame.contentDocument || frame.contentWindow?.document;
-          if (childDoc) collectInputs(childDoc, out, depth + 1);
-        } catch {
-          // cross-origin
-        }
-      }
+      if (el.disabled) return false;
+      const style = el.ownerDocument?.defaultView?.getComputedStyle?.(el);
+      if (!style) return true;
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      if (Number(style.opacity) === 0) return false;
+      const rect = el.getBoundingClientRect?.();
+      if (rect && rect.width < 2 && rect.height < 2) return false;
+      return true;
     } catch {
-      // cross-origin or closed shadow — skip
+      return true;
+    }
+  }
+
+  function isRawSubmitCandidate(el) {
+    if (!el || el.nodeType !== 1 || el.disabled) return false;
+    const tag = el.tagName;
+    const role = String(el.getAttribute?.("role") || "").toLowerCase();
+    const isControl =
+      tag === "BUTTON" ||
+      tag === "INPUT" ||
+      tag === "A" ||
+      role === "button";
+    if (!isControl) return false;
+
+    const typeAttr = el.getAttribute("type");
+    const type = String(
+      typeAttr != null && typeAttr !== "" ? typeAttr : el.type || ""
+    ).toLowerCase();
+
+    if (type === "reset" || type === "file") return false;
+
+    return controlMatchesSubmitList(el);
+  }
+
+  function markPrimarySubmit(el) {
+    if (!el) return null;
+    el.setAttribute(MARK_ATTR, "1");
+    return el;
+  }
+
+  function applyCaptureLabel(el) {
+    return markPrimarySubmit(el);
+  }
+
+  function clearMark(el) {
+    if (!el) return;
+    el.removeAttribute(MARK_ATTR);
+  }
+
+  function restoreOriginalLabel(el) {
+    clearMark(el);
+  }
+
+  function collectRawCandidates(root = document) {
+    const out = [];
+    const seen = new Set();
+    try {
+      root
+        .querySelectorAll?.(
+          "button, input[type='submit'], input[type='button'], a[role='button'], [role='button']"
+        )
+        ?.forEach((el) => {
+          if (!el || seen.has(el)) return;
+          if (!isRawSubmitCandidate(el)) return;
+          if (!isVisible(el)) return;
+          seen.add(el);
+          out.push(el);
+        });
+    } catch {
+      // ignore
     }
     return out;
   }
 
-  function looksLikeEmailText(text) {
-    const t = String(text || "").toLowerCase();
-    if (!t) return false;
-    return (
-      /\be-?mails?\b/.test(t) ||
-      /emailaddress|email_address|user_email|applicant.?email|work.?email|contact.?email|confirm.?email|your.?email|login.?email/.test(
-        t
-      ) ||
-      /(^|[^a-z])email([^a-z]|$)/.test(t)
-    );
+  function findExistingMarked(root = document) {
+    let last = null;
+    try {
+      root.querySelectorAll?.(`[${MARK_ATTR}="1"]`)?.forEach((el) => {
+        if (!controlMatchesSubmitList(el)) {
+          clearMark(el);
+          return;
+        }
+        if (isVisible(el)) last = el;
+      });
+    } catch {
+      // ignore
+    }
+    return last;
   }
 
-  function isEmailInput(el) {
-    if (!el || el.tagName !== "INPUT") return false;
-    const type = (el.type || "text").toLowerCase();
-    if (type === "email") return true;
-    if (
-      type === "hidden" ||
-      type === "password" ||
-      type === "file" ||
-      type === "checkbox" ||
-      type === "radio" ||
-      type === "submit" ||
-      type === "button" ||
-      type === "image" ||
-      type === "reset" ||
-      type === "color" ||
-      type === "range" ||
-      type === "date" ||
-      type === "datetime-local" ||
-      type === "time" ||
-      type === "month" ||
-      type === "week" ||
-      type === "number"
-    ) {
-      return false;
-    }
-    const auto = (
-      el.autocomplete ||
-      el.getAttribute("autocomplete") ||
-      ""
-    ).toLowerCase();
-    if (auto.includes("email")) return true;
-    if ((el.getAttribute("inputmode") || "").toLowerCase() === "email") {
-      return true;
-    }
-
-    const blob = `${textBlob(el)} ${labelText(el)} ${nearbyText(el)}`;
-    return looksLikeEmailText(blob);
+  function pickPrimarySubmit(root = document) {
+    const raw = collectRawCandidates(root);
+    if (raw.length) return raw[raw.length - 1];
+    return findExistingMarked(root);
   }
 
-  function isImageOnlyAccept(accept) {
-    const a = String(accept || "").toLowerCase().trim();
-    if (!a) return false;
-    // image/* only (no pdf/doc) → profile photo, not resume
-    if (/pdf|\.doc|msword|officedocument|rtf|text\/plain/.test(a)) {
-      return false;
-    }
-    return (
-      /^(image\/|\.png|\.jpe?g|\.gif|\.webp|\.bmp|\.svg)/.test(a) ||
-      /^image\//.test(a)
-    );
-  }
-
-  function looksLikeResumeOrDocUpload(text) {
-    const t = String(text || "").toLowerCase();
-    if (!t) return false;
-    return /resume|curriculum|\bcv\b|cover.?letter|upload.*(resume|cv|file|document)|(resume|cv).*upload|attach.*(resume|cv|file|document)|drop.*(resume|cv|file|document)|choose.*(file|document)|select.*(file|document)|browse.*(file|document)|drag.?and.?drop|drop.?zone|pdf|docx?|\.pdf/.test(
-      t
-    );
-  }
-
-  function isResumeUpload(el) {
-    if (!el || el.tagName !== "INPUT") return false;
-    if ((el.type || "").toLowerCase() !== "file") return false;
-
-    const accept = (el.accept || "").toLowerCase();
-    if (isImageOnlyAccept(accept)) return false;
-
-    if (
-      /pdf|msword|officedocument|document|\.doc|\.docx|\.pdf|\.rtf|\.txt|application\/pdf|text\/plain|\*\/\*/.test(
-        accept
-      )
-    ) {
-      return true;
-    }
-
-    const blob = `${textBlob(el)} ${labelText(el)} ${nearbyText(el)}`;
-    if (looksLikeResumeOrDocUpload(blob)) return true;
-
-    // Generic file input on an apply form (no accept, vague name) — still count
-    // when nearby copy mentions upload/file/document OR name/id looks like attachment.
-    if (!accept || accept === "*") {
-      if (
-        /file|upload|attach|document|resume|cv|application/i.test(
-          `${el.name || ""} ${el.id || ""} ${el.className || ""}`
-        )
-      ) {
-        return true;
-      }
-      if (/\b(upload|attach|file|document)\b/.test(blob)) return true;
-    }
-
-    return false;
+  /** Every visible control whose label matches SUBMIT_BUTTON_TEXTS. */
+  function findSubmitControls(root = document) {
+    const raw = collectRawCandidates(root);
+    if (raw.length) return raw;
+    const marked = findExistingMarked(root);
+    return marked ? [marked] : [];
   }
 
   /**
-   * @returns {{ isApplyPage: boolean, hasEmail: boolean, hasResumeUpload: boolean, inputCount: number }}
+   * Resolve the clicked control using the same list as detection.
+   * Evaluated at event time so React re-renders / lost marks still work.
    */
-  function detectApplyPageSignals(doc = document) {
-    const inputs = collectInputs(doc);
-    let hasEmail = false;
-    let hasResumeUpload = false;
-    for (const el of inputs) {
-      if (!hasEmail && isEmailInput(el)) hasEmail = true;
-      if (!hasResumeUpload && isResumeUpload(el)) hasResumeUpload = true;
-      if (hasEmail && hasResumeUpload) break;
+  function resolveSubmitControlFromEvent(fromEvent) {
+    if (!fromEvent) return null;
+    const path =
+      typeof fromEvent.composedPath === "function"
+        ? fromEvent.composedPath()
+        : [];
+    for (const n of path) {
+      if (n instanceof HTMLElement && isRawSubmitCandidate(n)) return n;
     }
+    const t =
+      fromEvent.target instanceof Element ? fromEvent.target : null;
+    const closest = t?.closest?.(
+      "button, input[type='submit'], input[type='button'], a[role='button'], [role='button']"
+    );
+    if (closest instanceof HTMLElement && isRawSubmitCandidate(closest)) {
+      return closest;
+    }
+    return null;
+  }
 
-    // Fallback: any non-image file input + email on same document tree.
-    if (hasEmail && !hasResumeUpload) {
-      for (const el of inputs) {
-        if (el.tagName !== "INPUT") continue;
-        if ((el.type || "").toLowerCase() !== "file") continue;
-        if (isImageOnlyAccept(el.accept || "")) continue;
-        hasResumeUpload = true;
-        break;
+  /**
+   * @param {Document} doc
+   * @param {{ mark?: boolean }} opts mark=false → detect only (status UI after release)
+   */
+  function detectApplyPageSignals(doc = document, opts = {}) {
+    const mark = opts.mark !== false;
+    const all = collectRawCandidates(doc);
+    const primary = all.length
+      ? all[all.length - 1]
+      : findExistingMarked(doc);
+
+    if (mark) {
+      const keep = new Set(all);
+      try {
+        doc.querySelectorAll?.(`[${MARK_ATTR}="1"]`)?.forEach((el) => {
+          if (!keep.has(el)) clearMark(el);
+        });
+      } catch {
+        // ignore
       }
+      // Mark every list match — any of them must trigger capture on click.
+      for (const el of all) markPrimarySubmit(el);
     }
 
     return {
-      isApplyPage: hasEmail && hasResumeUpload,
-      hasEmail,
-      hasResumeUpload,
-      inputCount: inputs.length,
+      isApplyPage: all.length > 0 || Boolean(primary),
+      submitCount: all.length || (primary ? 1 : 0),
+      hasEmail: false,
+      hasResumeUpload: false,
     };
   }
 
+  function isMarkedCaptureSubmit(el) {
+    if (!el) return false;
+    return el.getAttribute?.(MARK_ATTR) === "1";
+  }
+
+  /**
+   * Capture-hook gate: same criteria as detection (live list), mark optional.
+   * Mark alone is never enough — text must still match SUBMIT_BUTTON_TEXTS.
+   */
+  function isSubmitCandidate(el) {
+    return isRawSubmitCandidate(el);
+  }
+
   global.Devora21DetectApply = {
+    SUBMIT_BUTTON_TEXTS,
+    DEFAULT_SUBMIT_BUTTON_TEXTS,
+    getSubmitButtonTexts,
+    setSubmitButtonTexts,
     detectApplyPageSignals,
-    isEmailInput,
-    isResumeUpload,
-    collectInputs,
+    findSubmitControls,
+    pickPrimarySubmit,
+    resolveSubmitControlFromEvent,
+    applyCaptureLabel,
+    markPrimarySubmit,
+    restoreOriginalLabel,
+    clearMark,
+    isSubmitCandidate,
+    isRawSubmitCandidate,
+    isMarkedCaptureSubmit,
+    isSubmitLabel,
+    controlMatchesSubmitList,
+    MARK_ATTR,
   };
 })(typeof globalThis !== "undefined" ? globalThis : window);

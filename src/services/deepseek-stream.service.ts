@@ -1,8 +1,9 @@
-import { env, aiMockEnabled, deepseekEnabled } from "../config/env";
+import { aiMockEnabled, claudeEnabled } from "../config/env";
+import { getDefaultClaudeModel } from "../lib/claude-models";
+import { streamChatCompletion } from "./claude.service";
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
-export const DEEPSEEK_MODEL = "deepseek-v4-pro";
-const DEEPSEEK_TIMEOUT_MS = 120_000;
+/** @deprecated Alias — streaming now uses Claude Haiku 5.5. */
+export const DEEPSEEK_MODEL = getDefaultClaudeModel();
 
 export type DeepSeekChatMessage = {
   role: "system" | "user" | "assistant";
@@ -13,31 +14,6 @@ export type DeepSeekStreamInput = {
   messages: DeepSeekChatMessage[];
   maxTokens?: number;
 };
-
-type DeepSeekStreamChunk = {
-  choices?: Array<{
-    delta?: {
-      content?: string;
-    };
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
-async function parseDeepSeekError(response: Response): Promise<string> {
-  try {
-    const data = (await response.json()) as DeepSeekStreamChunk & {
-      error?: { message?: string };
-    };
-    if (data.error?.message) {
-      return data.error.message;
-    }
-  } catch {
-    // fall through
-  }
-  return `DeepSeek request failed (${response.status})`;
-}
 
 async function streamMockDeepSeek(
   input: DeepSeekStreamInput,
@@ -52,9 +28,9 @@ async function streamMockDeepSeek(
   const content = [
     `Verdict: PARTIAL FIT (mock)`,
     ``,
-    `${company} — mock Job Check via DeepSeek.`,
+    `${company} — mock Job Check via Claude Haiku 5.5.`,
     `Working language and USD pay were not fully verified in mock mode.`,
-    `Enable real DeepSeek (AI_MOCK=false) for a live analysis.`,
+    `Enable real Claude (AI_MOCK=false) for a live analysis.`,
   ].join("\n");
 
   const chunkSize = 48;
@@ -65,8 +41,8 @@ async function streamMockDeepSeek(
 }
 
 /**
- * Streams plain-text assistant tokens from DeepSeek (OpenAI-compatible SSE).
- * Same response style as Claude Job Check: raw text chunks for the HTTP body.
+ * Streams plain-text assistant tokens via Claude Haiku 5.5.
+ * Export name kept for callers; no longer calls DeepSeek.
  */
 export async function streamDeepSeekChatCompletion(
   input: DeepSeekStreamInput,
@@ -77,76 +53,17 @@ export async function streamDeepSeekChatCompletion(
     return;
   }
 
-  if (!deepseekEnabled) {
-    throw new Error("DeepSeek API is not configured");
+  if (!claudeEnabled) {
+    throw new Error("Claude API is not configured");
   }
 
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.DEEPSEEK_API_KEY!}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
+  await streamChatCompletion(
+    {
+      model: getDefaultClaudeModel(),
       messages: input.messages,
-      max_tokens: input.maxTokens ?? 4096,
-      stream: true,
-    }),
-    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error(await parseDeepSeekError(response));
-  }
-
-  if (!response.body) {
-    throw new Error("DeepSeek returned an empty stream");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) {
-          continue;
-        }
-
-        const payload = line.slice(6).trim();
-        if (!payload || payload === "[DONE]") {
-          continue;
-        }
-
-        let chunk: DeepSeekStreamChunk;
-        try {
-          chunk = JSON.parse(payload) as DeepSeekStreamChunk;
-        } catch {
-          continue;
-        }
-
-        if (chunk.error?.message) {
-          throw new Error(chunk.error.message);
-        }
-
-        const text = chunk.choices?.[0]?.delta?.content;
-        if (text) {
-          onText(text);
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
+      maxTokens: input.maxTokens ?? 4096,
+      jsonObject: false,
+    },
+    onText
+  );
 }

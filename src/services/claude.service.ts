@@ -3,7 +3,7 @@ import {
   CLAUDE_MODEL as DEFAULT_CLAUDE_MODEL,
   CLAUDE_MAX_OUTPUT_TOKENS_CEILING,
   getClaudeMaxOutputTokens,
-  modelSupportsBetweenToolsThinking,
+  getClaudeThinkingConfig,
   resolveClaudeModel,
 } from "../lib/claude-models";
 import type { ClaudeChatInput } from "../validators/ai.validator";
@@ -16,8 +16,8 @@ const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 /** Default model when the request omits `model` (re-export for boot logs). */
 export const CLAUDE_MODEL = DEFAULT_CLAUDE_MODEL;
 /**
- * Highest output ceiling we request (Sonnet/Opus).
- * Prefer getClaudeMaxOutputTokens(model) — Haiku is capped at 64k.
+ * Highest output ceiling we request (Haiku 5.5 = 128k).
+ * Prefer getClaudeMaxOutputTokens(model).
  */
 export const CLAUDE_MAX_OUTPUT_TOKENS = CLAUDE_MAX_OUTPUT_TOKENS_CEILING;
 /** Fail if Anthropic never starts sending the response body. */
@@ -110,11 +110,12 @@ function buildClaudeBody(input: ClaudeChatInput, stream: boolean): Record<string
     stream,
   };
 
-  // Sonnet 5.5+: "disabled" is rejected. "between_tools" turns off up-front
-  // thinking so the full max_tokens stays available for streamed text/JSON.
-  // Claude 4.x allowlisted models do not use this parameter.
-  if (modelSupportsBetweenToolsThinking(model)) {
-    body.thinking = { type: "between_tools" };
+  // Turn off up-front thinking so streamed text/JSON starts immediately.
+  // Haiku 5.5: adaptive thinking is on by default (hidden) → ~30–60s blank
+  // stream until text begins; use type "disabled". Sonnet/Opus 5.x: "between_tools".
+  const thinking = getClaudeThinkingConfig(model);
+  if (thinking) {
+    body.thinking = thinking;
   }
 
   if (system) {

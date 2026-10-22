@@ -1,9 +1,8 @@
-import { env } from "../config/env";
+import { claudeEnabled } from "../config/env";
 import { AppError } from "../middleware/errorHandler";
+import { getDefaultClaudeModel } from "../lib/claude-models";
+import { createChatCompletion } from "./claude.service";
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
-const DEEPSEEK_MODEL = "deepseek-v4-pro";
-const DEEPSEEK_TIMEOUT_MS = 120_000;
 const MAX_ATTEMPTS = 3;
 
 export type NormalizedJobFields = {
@@ -133,7 +132,7 @@ function missingFieldNames(fields: NormalizedJobFields): string[] {
   return missing;
 }
 
-async function callDeepSeekOnce(
+async function callNormalizeOnce(
   zyteRaw: unknown,
   attempt: number,
   previous?: NormalizedJobFields
@@ -157,62 +156,36 @@ async function callDeepSeekOnce(
     );
   }
 
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.DEEPSEEK_API_KEY!}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
+  try {
+    const { content } = await createChatCompletion({
+      model: getDefaultClaudeModel(),
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userParts.join("\n") },
       ],
-      max_tokens: 8192,
-      response_format: { type: "json_object" },
-      thinking: { type: "disabled" },
-    }),
-    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    let detail = `DeepSeek request failed (${response.status})`;
-    try {
-      const errBody = (await response.json()) as { error?: { message?: string } };
-      if (errBody.error?.message) {
-        detail = errBody.error.message;
-      }
-    } catch {
-      // fall through
-    }
-    throw new AppError(502, detail);
-  }
-
-  const data = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new AppError(502, "DeepSeek returned an empty response");
-  }
-
-  try {
+      maxTokens: 8192,
+      jsonObject: true,
+    });
     return parseFields(content);
-  } catch {
-    throw new AppError(502, "DeepSeek returned invalid JSON");
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError(
+      502,
+      err instanceof Error ? err.message : "Claude returned invalid job fields"
+    );
   }
 }
 
 /**
- * Normalize scraper JSON into fixed job fields via DeepSeek.
+ * Normalize scraper JSON into fixed job fields via Claude Haiku 5.5.
  * Retries up to 3 times when any of companyName / jobTitle / jobDescription is blank.
+ * Export name kept for callers; implementation no longer uses DeepSeek.
  */
 export async function normalizeJobFieldsWithDeepSeek(
   zyteRaw: unknown
 ): Promise<NormalizeJobResult> {
-  if (!env.DEEPSEEK_API_KEY) {
-    throw new AppError(503, "DeepSeek API is not configured");
+  if (!claudeEnabled) {
+    throw new AppError(503, "Claude API is not configured");
   }
 
   let lastFields: NormalizedJobFields = {
@@ -225,7 +198,7 @@ export async function normalizeJobFieldsWithDeepSeek(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     attempts = attempt;
     try {
-      lastFields = await callDeepSeekOnce(
+      lastFields = await callNormalizeOnce(
         zyteRaw,
         attempt,
         attempt > 1 ? lastFields : undefined

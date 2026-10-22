@@ -1,30 +1,14 @@
-import { getSettings, getTabState, hostAllowed } from "./lib/storage.js";
-import { fetchMe } from "./lib/api.js";
-
 const els = {
   statusLine: document.getElementById("statusLine"),
-  ownerEmail: document.getElementById("ownerEmail"),
-  tabHost: document.getElementById("tabHost"),
-  applyPage: document.getElementById("applyPage"),
-  applySignals: document.getElementById("applySignals"),
-  hostAllowed: document.getElementById("hostAllowed"),
-  pairCount: document.getElementById("pairCount"),
+  submitDetected: document.getElementById("submitDetected"),
   btnToggle: document.getElementById("btnToggle"),
-  btnPause: document.getElementById("btnPause"),
-  btnResume: document.getElementById("btnResume"),
-  btnClear: document.getElementById("btnClear"),
   openOptions: document.getElementById("openOptions"),
   error: document.getElementById("error"),
 };
 
 function showError(msg) {
-  if (!msg) {
-    els.error.hidden = true;
-    els.error.textContent = "";
-    return;
-  }
-  els.error.hidden = false;
-  els.error.textContent = msg;
+  els.error.hidden = !msg;
+  els.error.textContent = msg || "";
 }
 
 async function activeTab() {
@@ -32,159 +16,53 @@ async function activeTab() {
   return tab;
 }
 
-async function forceScan(tabId, tabUrl) {
-  if (tabId == null) return;
-  try {
-    // Inject detector into all frames (ATS forms are often inside iframes).
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: ["lib/detect-apply.js"],
-    });
-    const results = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: () => {
-        const api = globalThis.Devora21DetectApply;
-        if (!api) return null;
-        return api.detectApplyPageSignals(document);
-      },
-    });
-
-    let hasEmail = false;
-    let hasResumeUpload = false;
-    for (const r of results || []) {
-      if (!r?.result) continue;
-      if (r.result.hasEmail) hasEmail = true;
-      if (r.result.hasResumeUpload) hasResumeUpload = true;
-    }
-
-    await chrome.runtime.sendMessage({
-      type: "APPLY_PAGE_DETECTED",
-      tabId,
-      url: tabUrl || "",
-      pageTitle: "",
-      hasEmail,
-      hasResumeUpload,
-    });
-
-    // Also nudge already-injected content scripts (keeps listeners warm).
-    try {
-      await chrome.tabs.sendMessage(tabId, { type: "FORCE_APPLY_SCAN" });
-    } catch {
-      // ok
-    }
-  } catch {
-    // Restricted page (chrome://) or blocked — ignore.
-  }
-}
-
 async function refresh() {
   showError("");
-  const settings = await getSettings();
   const tab = await activeTab();
-  const tabId = tab?.id;
-  const url = tab?.url || "";
-  let host = "—";
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    host = url || "—";
-  }
+  const state = await chrome.runtime.sendMessage({
+    type: "GET_RECORDING_STATE",
+    url: tab?.url || "",
+    tabId: tab?.id,
+  });
+  const on = Boolean(state?.captureEnabled || state?.recordingEnabled);
+  els.btnToggle.textContent = on ? "On" : "Off";
+  els.btnToggle.className = `toggle ${on ? "on" : "off"}`;
 
-  await forceScan(tabId, url);
-
-  const restrictList = settings.allowedHosts || [];
-  const allowed = hostAllowed(url, restrictList);
-  const state =
-    tabId != null
-      ? await getTabState(tabId)
-      : {
-          pairs: {},
-          paused: false,
-          isApplyPage: false,
-          hasEmail: false,
-          hasResumeUpload: false,
-        };
-  const count = Object.keys(state.pairs || {}).length;
-  const isApplyPage = Boolean(state.isApplyPage);
-
-  els.tabHost.textContent = host;
-  els.applyPage.textContent = isApplyPage
-    ? "yes · syncing to backend"
-    : count > 0
-      ? "no · buffering locally"
-      : "no · waiting";
-  els.applySignals.textContent = `email:${state.hasEmail ? "✓" : "–"} resume:${
-    state.hasResumeUpload ? "✓" : "–"
-  }`;
-  els.hostAllowed.textContent =
-    restrictList.length === 0
-      ? "all sites"
-      : allowed
-        ? "allowed"
-        : "blocked by list";
-  els.pairCount.textContent = String(count);
-
-  const canWork =
-    settings.recordingEnabled && settings.consentAccepted && allowed && !state.paused;
-
-  els.statusLine.className = "status";
-  if (!settings.consentAccepted) {
-    els.statusLine.textContent = "Consent required — open Options";
-    els.statusLine.classList.add("off");
-  } else if (!settings.recordingEnabled) {
-    els.statusLine.textContent = "Recording off";
-    els.statusLine.classList.add("off");
-  } else if (!allowed) {
-    els.statusLine.textContent = "This host is outside your restrict list";
-    els.statusLine.classList.add("off");
-  } else if (state.paused) {
-    els.statusLine.textContent = "Paused on this tab";
-    els.statusLine.classList.add("paused");
-  } else if (isApplyPage && canWork) {
-    els.statusLine.textContent = "Apply Page · syncing buffer to backend";
-    els.statusLine.classList.add("on");
-  } else if (canWork) {
-    els.statusLine.textContent =
-      count > 0
-        ? `Buffering ${count} field(s) · waiting for email + resume`
-        : "Buffering on · waiting for Apply Page (email + resume)";
-    els.statusLine.classList.add("paused");
-  }
-
-  els.btnToggle.textContent = settings.recordingEnabled
-    ? "Disable recording"
-    : "Enable recording";
-
-  try {
-    if (settings.apiKey) {
-      const me = await fetchMe();
-      els.ownerEmail.textContent = me?.user?.email || me?.user?.id || "—";
+  if (els.submitDetected) {
+    if (state?.isApplyPage) {
+      els.submitDetected.textContent = `Yes (${state.submitCount || 1})`;
+      els.submitDetected.className = "yes";
     } else {
-      els.ownerEmail.textContent = "API key missing";
+      els.submitDetected.textContent = "No";
+      els.submitDetected.className = "no";
     }
-  } catch (err) {
-    els.ownerEmail.textContent = "Auth failed";
-    showError(err.message || String(err));
+  }
+
+  if (!on) {
+    els.statusLine.textContent = "Capture is off";
+    els.statusLine.className = "status off";
+  } else if (state?.isApplyPage) {
+    els.statusLine.textContent = "Ready — Submit captures, then submits";
+    els.statusLine.className = "status ready";
+  } else {
+    els.statusLine.textContent = "Waiting for Submit";
+    els.statusLine.className = "status off";
   }
 }
 
-async function sendAction(action) {
+els.btnToggle.addEventListener("click", async () => {
   const tab = await activeTab();
   await chrome.runtime.sendMessage({
-    type: "POPUP_ACTION",
-    action,
+    type: "UI_ACTION",
+    action: "toggle_capture",
     tabId: tab?.id,
   });
   await refresh();
-}
+});
 
-els.btnToggle.addEventListener("click", () => sendAction("toggle_recording"));
-els.btnPause.addEventListener("click", () => sendAction("pause"));
-els.btnResume.addEventListener("click", () => sendAction("resume"));
-els.btnClear.addEventListener("click", () => sendAction("clear_tab"));
 els.openOptions.addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 });
 
-void refresh();
+void refresh().catch((err) => showError(err?.message || String(err)));

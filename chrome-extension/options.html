@@ -2,23 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Devora21 Q&A Options</title>
+    <title>Devora21 Capture Settings</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main>
-      <h1>Devora21 Application Q&A</h1>
+      <h1>Capture settings</h1>
       <p class="lede">
-        Configure secure sync to your Devora21 account. With recording on, answers are
-        buffered locally first. They sync only after the tab is an <strong>Apply Page</strong>
-        (email input + resume upload, including inside iframes / shadow DOM). If Apply Page
-        is never detected, nothing is uploaded. Passwords and payment fields are never stored.
+        Connect the extension to your Devora21 account. Screenshots upload only after you
+        review them in the side panel.
       </p>
 
       <label class="consent">
         <input id="consentAccepted" type="checkbox" />
-        I consent to capturing job-application questions and answers I enter in the
-        browser, and syncing them to Devora21 for Super Admin review.
+        I consent to capturing application page screenshots and storing them in Devora21.
       </label>
 
       <label>
@@ -27,30 +24,41 @@
       </label>
 
       <label>
-        API key (<code>dv21_…</code>)
+        API key
         <input id="apiKey" type="password" autocomplete="off" placeholder="dv21_…" />
       </label>
 
       <label>
-        Optional host restrict list (one per line)
-        <textarea
-          id="allowedHosts"
-          rows="6"
-          placeholder="Leave empty to record on ALL sites.&#10;Or restrict, e.g.:&#10;boards.greenhouse.io&#10;jobs.lever.co&#10;myworkdayjobs.com"
-        ></textarea>
+        Optional host allowlist (one per line, blank = all sites)
+        <textarea id="allowedHosts" rows="4" placeholder="jobs.ashbyhq.com"></textarea>
       </label>
-      <p class="lede" style="margin-top: -8px; font-size: 12px">
-        Leave blank = every apply page. Only fill this if you want to limit capturing to
-        specific domains.
-      </p>
+
+      <section class="submit-texts" aria-labelledby="submitTextsHeading">
+        <h2 id="submitTextsHeading">Submit button texts</h2>
+        <p class="hint">
+          Exact match (case-insensitive) against button text, value, aria-label, or title.
+          Add labels like <code>Submit application</code> or <code>Apply Now</code> as needed.
+        </p>
+        <ul id="submitTextsList" class="submit-texts-list"></ul>
+        <div class="submit-texts-add">
+          <input
+            id="submitTextNew"
+            type="text"
+            maxlength="120"
+            placeholder="New label, e.g. Send Application"
+            autocomplete="off"
+          />
+          <button id="submitTextAdd" type="button" class="secondary">Add</button>
+        </div>
+      </section>
 
       <label class="consent">
-        <input id="recordingEnabled" type="checkbox" />
-        Enable recording by default
+        <input id="captureEnabled" type="checkbox" />
+        Enable capture by default
       </label>
 
       <div class="row">
-        <button id="save" type="button">Save settings</button>
+        <button id="save" type="button">Save</button>
         <button id="test" type="button" class="secondary">Test connection</button>
       </div>
       <p id="message" class="message" hidden></p>

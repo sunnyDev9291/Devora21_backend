@@ -92,3 +92,67 @@ button.secondary {
 code {
   font-size: 12px;
 }
+
+h2 {
+  margin: 28px 0 6px;
+  font-size: 16px;
+}
+
+.hint {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.submit-texts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.submit-texts-list li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.submit-texts-list input[type="text"] {
+  flex: 1;
+  width: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 400;
+}
+
+.submit-texts-list button.danger {
+  background: #b91c1c;
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+
+.submit-texts-list button.danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.submit-texts-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.submit-texts-add input[type="text"] {
+  flex: 1;
+  width: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 400;
+}

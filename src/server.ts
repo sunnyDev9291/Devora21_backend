@@ -51,7 +51,7 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
   }
   console.log(`Zyte scrape: ${zyteEnabled ? "enabled" : "not configured"}`);
   console.log(
-    `DeepSeek job normalize: ${deepseekEnabled ? "enabled" : "not configured"}`
+    `Job normalize / QA match: Claude Haiku 5.5 (${claudeEnabled ? "enabled" : "not configured"}; DeepSeek legacy key present=${deepseekEnabled})`
   );
   console.log(`Backblaze B2 PDF host: ${backblazeEnabled ? "enabled" : "not configured"}`);
   console.log(`Auth rate limit: ${rateLimitEnabled ? "enabled" : "disabled"}`);

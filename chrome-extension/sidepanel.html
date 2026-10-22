@@ -2,98 +2,54 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Devora21 Q&A</title>
-    <link rel="stylesheet" href="sidepanel.css?v=2.1.10" />
+    <title>Devora21 Capture</title>
+    <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
     <main>
-      <header class="header">
-        <img class="logo" src="icons/icon48.png" width="40" height="40" alt="Devora21" />
+      <header class="top">
         <div>
-          <div class="eyebrow">DEVORA21 · SIDEBAR</div>
-          <h1>Application Q&A</h1>
-          <p id="statusLine" class="status off">Recording off</p>
+          <p class="brand">Devora21</p>
+          <h1>Capture</h1>
         </div>
+        <button id="btnToggle" type="button" class="toggle off">Off</button>
       </header>
 
-      <section class="card">
-        <div class="row">
-          <span>Owner</span>
-          <strong id="ownerEmail">—</strong>
-        </div>
-        <div class="row">
-          <span>This tab</span>
-          <strong id="tabHost">—</strong>
-        </div>
-        <div class="row">
-          <span>Apply page</span>
-          <strong id="applyPage">—</strong>
-        </div>
-        <div class="row">
-          <span>Signals</span>
-          <strong id="applySignals">—</strong>
-        </div>
-        <div class="row">
-          <span>Site scope</span>
-          <strong id="hostAllowed">—</strong>
-        </div>
-        <div class="row">
-          <span>Buffered events</span>
-          <strong id="pairCount">0</strong>
+      <p id="statusLine" class="status">Turn capture on to begin</p>
+
+      <section class="panel">
+        <div class="stat">
+          <span>Submit detected</span>
+          <strong id="submitDetected">—</strong>
         </div>
       </section>
 
-      <section class="actions">
-        <button id="btnToggle" type="button">Enable recording</button>
-        <button id="btnPause" type="button" class="secondary">Pause tab</button>
-        <button id="btnResume" type="button" class="secondary">Resume tab</button>
-        <button id="btnClear" type="button" class="danger">Clear tab buffer</button>
-        <button id="btnRefresh" type="button" class="secondary">Refresh status</button>
-      </section>
-
-      <section class="inspector" id="inspector">
-        <div class="inspector-head">
-          <div>
-            <div class="eyebrow">DOM INSPECTOR</div>
-            <h2>Node tree</h2>
+      <section class="recent">
+        <div class="section-head">
+          <h2>Local buffer</h2>
+          <div class="section-actions">
+            <button id="btnReloadList" type="button" class="linkish">Refresh</button>
+            <button id="btnClearBuffer" type="button" class="linkish danger">Clear all</button>
           </div>
-          <button id="btnClearHl" type="button" class="secondary tiny">Clear highlight</button>
         </div>
-        <div class="view-toggle" role="tablist" aria-label="Tree view mode">
-          <button type="button" id="btnViewDom" class="view-toggle-btn is-active" role="tab" aria-selected="true" data-mode="dom">DOM View</button>
-          <button type="button" id="btnViewBfs" class="view-toggle-btn" role="tab" aria-selected="false" data-mode="bfs">BFS View</button>
-        </div>
-        <div class="legend">
-          <span class="lg blue"><i></i>Visited</span>
-          <span class="lg text"><i></i>Text match M1–M5</span>
-          <span class="lg trigger"><i></i>Trigger (0)</span>
-          <span class="lg selected"><i></i>Selected</span>
-        </div>
-        <p id="inspectorMeta" class="inspector-meta">Waiting for a user action…</p>
-        <div class="tree-toolbar">
-          <button type="button" id="btnZoomOut" class="secondary tiny" title="Zoom out">−</button>
-          <button type="button" id="btnZoomIn" class="secondary tiny" title="Zoom in">+</button>
-          <button type="button" id="btnFitView" class="secondary tiny" title="Fit entire tree">Fit</button>
-          <span id="zoomLabel" class="zoom-label">100%</span>
-        </div>
-        <div id="domTree" class="node-graph" aria-label="DOM node tree"></div>
-        <div id="nodeDetail" class="node-detail" hidden>
-          <div class="detail-title">Selected DOM</div>
-          <pre id="nodeDetailBody" class="detail-body"></pre>
-        </div>
-        <div id="aiContextDetail" class="node-detail ai-context" hidden>
-          <div class="detail-title">Last DOM context → AI</div>
-          <pre id="aiContextBody" class="detail-body"></pre>
+        <p class="sub">Up to 10 URLs · expand for small previews · delete per session</p>
+        <div id="captureList" class="list">
+          <p class="empty">No captures yet</p>
         </div>
       </section>
 
-      <p class="hint">
-        Click a node to outline it on the page and show its DOM details below.
-        Tree updates when a new action is captured.
-      </p>
-      <a id="openOptions" href="#">Open options</a>
+      <footer class="foot">
+        <a id="openOptions" href="#">Settings</a>
+      </footer>
       <pre id="error" class="error" hidden></pre>
     </main>
-    <script type="module" src="sidepanel.js?v=2.1.10"></script>
+
+    <div id="lightbox" class="lightbox" hidden>
+      <button type="button" id="lightboxClose" class="lightbox-close" aria-label="Close">×</button>
+      <img id="lightboxImg" alt="Enlarged capture" />
+      <p id="lightboxCaption" class="lightbox-caption"></p>
+    </div>
+
+    <script type="module" src="sidepanel.js"></script>
   </body>
 </html>

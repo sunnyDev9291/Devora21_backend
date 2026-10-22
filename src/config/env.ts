@@ -83,7 +83,10 @@ const envSchema = z.object({
    */
   JOB_CHECK_SYSTEM_PROMPT: z.string().optional(),
 
-  /** DeepSeek API key — used to normalize Zyte scrape output for /jobs/scrape. */
+  /**
+   * Legacy DeepSeek key (unused — job normalize / QA match now use Claude Haiku 5.5).
+   * Kept so existing .env files still parse.
+   */
   DEEPSEEK_API_KEY: z.string().optional(),
 
   /** Zyte API key for job link scraping. */

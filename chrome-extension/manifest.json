@@ -1,16 +1,23 @@
 {
   "manifest_version": 3,
-  "name": "Devora21 Application Q&A Recorder",
-  "version": "2.1.10",
-  "description": "Capture job application questions and answers per browser tab and sync securely to Devora21.",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
-  "host_permissions": ["http://*/*", "https://*/*"],
+  "name": "Devora21 Application Capture",
+  "version": "3.2.5",
+  "description": "On Submit click, capture the application page as compressed grayscale screenshots and sync to Devora21.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "sidePanel",
+    "webNavigation"
+  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Devora21 Q&A — open sidebar",
+    "default_title": "Devora21 Capture — open sidebar",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -29,7 +36,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["lib/detect-apply.js", "lib/dom-event.js", "content.js"],
+      "js": ["lib/detect-apply.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
