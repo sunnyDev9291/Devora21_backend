@@ -221,7 +221,7 @@ async function runResumeFromJobPipeline(
     await setJobStatus(jobId, "generating", {
       jobTitle,
       companyName,
-      message: `Calling Claude ${modelId} (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
+      message: `Calling ${modelId} (${parsedTemplate.layout} layout, ${parsedTemplate.jobs.length} job block(s))…`,
     });
 
     const ai = await createChatCompletion({

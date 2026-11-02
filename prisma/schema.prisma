@@ -56,7 +56,9 @@ model User {
   resumeGenerationJobs   ResumeGenerationJob[]
   remoteDevices          RemoteDevice[]
   resumeRemoteDeliveries ResumeRemoteDelivery[]
-  applicationQaSessions  ApplicationQaSession[]
+  applicationQaSessions       ApplicationQaSession[]
+  applicationCaptureSessions  ApplicationCaptureSession[]
+  rrwebSessions               RrwebSession[]
 
   @@unique([provider, providerId])
   @@index([email])
@@ -133,6 +135,98 @@ model ApplicationQaItem {
   @@index([sessionId, occurredAt])
   @@index([sessionId, matchStatus])
   @@map("application_qa_items")
+}
+
+/**
+ * Submit-triggered full-page screenshot capture for a single-page application.
+ * Extension uploads grayscale JPEG slices after intercepting Submit.
+ */
+/**
+ * rrweb apply-attempt recording (manager replay).
+ * One row = one apply attempt (may span URL changes / related tabs).
+ */
+model RrwebSession {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  /** Client-generated apply-attempt id (shared across frames/tabs). */
+  clientSessionId String   @map("client_session_id")
+  /** Canonical/first apply URL for listing (not every SPA hop). */
+  primaryUrl      String   @map("primary_url") @db.Text
+  pageTitle       String?  @map("page_title")
+  /** recording | uploaded | failed | deleted */
+  status          String   @default("recording")
+  eventCount      Int      @default(0) @map("event_count")
+  durationMs      Int?     @map("duration_ms")
+  frameCount      Int      @default(0) @map("frame_count")
+  storageKey      String?  @map("storage_key")
+  eventsUrl       String?  @map("events_url") @db.Text
+  /** Super Admin opened/played this session. */
+  reviewed        Boolean  @default(false)
+  reviewedAt      DateTime? @map("reviewed_at")
+  startedAt       DateTime @map("started_at")
+  endedAt         DateTime? @map("ended_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientSessionId])
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([userId, primaryUrl])
+  @@index([status, startedAt(sort: Desc)])
+  @@index([userId, reviewed])
+  @@map("rrweb_sessions")
+}
+
+model ApplicationCaptureSession {
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  /** Client-generated capture session id (one Submit attempt). */
+  clientCaptureId String  @map("client_capture_id")
+  tabUrl         String   @map("tab_url") @db.Text
+  pageTitle      String?  @map("page_title")
+  /** pending | uploaded | failed | deleted */
+  status         String   @default("uploaded")
+  sliceCount     Int      @default(0) @map("slice_count")
+  errorMessage   String?  @map("error_message") @db.Text
+  capturedAt     DateTime @default(now()) @map("captured_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user   User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images ApplicationCaptureImage[]
+
+  @@unique([userId, clientCaptureId])
+  @@index([userId, tabUrl])
+  @@index([userId, capturedAt(sort: Desc)])
+  @@index([status, capturedAt(sort: Desc)])
+  @@map("application_capture_sessions")
+}
+
+model ApplicationCaptureImage {
+  id         String   @id @default(uuid())
+  sessionId  String   @map("session_id")
+  /** 0-based capture order (top → bottom). */
+  sortOrder  Int      @map("sort_order")
+  storageKey String   @map("storage_key")
+  imageUrl   String   @map("image_url") @db.Text
+  width      Int?
+  height     Int?
+  byteSize   Int?     @map("byte_size")
+  /**
+   * Super Admin review: false until the admin opens/expands the screenshot.
+   * New uploads default to unchecked.
+   */
+  reviewed   Boolean  @default(false)
+  reviewedAt DateTime? @map("reviewed_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  session ApplicationCaptureSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, sortOrder])
+  @@index([sessionId])
+  @@index([sessionId, reviewed])
+  @@map("application_capture_images")
 }
 
 /** Original DOCX resume template uploaded by the user (source of truth for fill/render). */

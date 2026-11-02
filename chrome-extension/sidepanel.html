@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Devora21 Capture</title>
+    <title>Devora21 Apply Gate</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
@@ -10,46 +10,31 @@
       <header class="top">
         <div>
           <p class="brand">Devora21</p>
-          <h1>Capture</h1>
+          <h1>Apply gate</h1>
         </div>
         <button id="btnToggle" type="button" class="toggle off">Off</button>
       </header>
 
-      <p id="statusLine" class="status">Turn capture on to begin</p>
-
-      <section class="panel">
-        <div class="stat">
-          <span>Submit detected</span>
-          <strong id="submitDetected">—</strong>
+      <section id="recPanel" class="rec-panel phase-off" aria-live="polite">
+        <div class="rec-row">
+          <span id="recDot" class="rec-dot" aria-hidden="true"></span>
+          <strong id="recLabel">Screenshot gate off</strong>
         </div>
+        <p id="statusLine" class="status">
+          When On, Submit / Apply / Send asks for a screenshot before continuing.
+        </p>
       </section>
 
-      <section class="recent">
-        <div class="section-head">
-          <h2>Local buffer</h2>
-          <div class="section-actions">
-            <button id="btnReloadList" type="button" class="linkish">Refresh</button>
-            <button id="btnClearBuffer" type="button" class="linkish danger">Clear all</button>
-          </div>
-        </div>
-        <p class="sub">Up to 10 URLs · expand for small previews · delete per session</p>
-        <div id="captureList" class="list">
-          <p class="empty">No captures yet</p>
-        </div>
-      </section>
+      <p class="hint">
+        rrweb session recording has been removed. Super Admin reviews uploaded
+        screenshots under Application Captures.
+      </p>
 
       <footer class="foot">
         <a id="openOptions" href="#">Settings</a>
       </footer>
       <pre id="error" class="error" hidden></pre>
     </main>
-
-    <div id="lightbox" class="lightbox" hidden>
-      <button type="button" id="lightboxClose" class="lightbox-close" aria-label="Close">×</button>
-      <img id="lightboxImg" alt="Enlarged capture" />
-      <p id="lightboxCaption" class="lightbox-caption"></p>
-    </div>
-
     <script type="module" src="sidepanel.js"></script>
   </body>
 </html>

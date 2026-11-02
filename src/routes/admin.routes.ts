@@ -38,6 +38,17 @@ import {
   adminStreamQaTicketHandler,
 } from "../controllers/application-qa.controller";
 import {
+  acceptApplicationCaptureStreamTicket,
+  adminListCaptureOwnersHandler,
+  adminListCapturesHandler,
+  adminGetCaptureHandler,
+  adminDeleteCaptureHandler,
+  adminDeleteCaptureImageHandler,
+  adminMarkCaptureImageReviewedHandler,
+  adminStreamCaptureTicketHandler,
+  adminStreamCaptureHandler,
+} from "../controllers/application-capture.controller";
+import {
   putGatewayCredentialsSchema,
   verifyGatewayCredentialsSchema,
 } from "../validators/admin-gateway.validator";
@@ -47,6 +58,7 @@ const router = Router();
 // EventSource cannot set Authorization — allow ?access_token= / ?token= / ?ticket=
 router.use(acceptQueryAccessToken);
 router.use(acceptApplicationQaStreamTicket);
+router.use(acceptApplicationCaptureStreamTicket);
 router.use(requireAuth, requireSuperAdmin);
 
 /** Per–Super Admin operator gateway credentials (FE /super-admin second gate). */
@@ -81,6 +93,26 @@ router.post("/application-qa/stream-ticket", adminStreamQaTicketHandler);
 router.get("/application-qa/stream", adminStreamQaHandler);
 router.get("/application-qa/sessions/:id", adminGetQaSessionHandler);
 router.delete("/application-qa/sessions/:id", adminDeleteQaSessionHandler);
+
+// Application Captures (Chrome extension screenshots) — Super Admin only
+router.get("/application-captures/owners", adminListCaptureOwnersHandler);
+/** Live SSE: ticket + stream (register before :id). */
+router.post(
+  "/application-captures/stream-ticket",
+  adminStreamCaptureTicketHandler
+);
+router.get("/application-captures/stream", adminStreamCaptureHandler);
+router.get("/application-captures", adminListCapturesHandler);
+router.post(
+  "/application-captures/:id/images/:imageId/review",
+  adminMarkCaptureImageReviewedHandler
+);
+router.delete(
+  "/application-captures/:id/images/:imageId",
+  adminDeleteCaptureImageHandler
+);
+router.get("/application-captures/:id", adminGetCaptureHandler);
+router.delete("/application-captures/:id", adminDeleteCaptureHandler);
 
 // Resume analytics & management (order: static paths before :id)
 router.get("/resumes/analytics/overview", adminResumeOverviewAnalyticsHandler);

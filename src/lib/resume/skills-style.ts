@@ -1,67 +1,7 @@
 /**
- * Whole-token skill bolding — e.g. "git" must not bold inside "Digital".
  * Skills reshape: template = FORMAT only; writing instructions / AI win for
  * category count, names, order, and items (no caps to template sample).
  */
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Single-letter / junk tokens that must never auto-bold (e.g. "A" from "A/B Testing"). */
-const BOLD_TERM_ALLOW_SINGLE = new Set(["c", "r", "go"]);
-
-function isBoldableSkillTerm(term: string): boolean {
-  const t = term.trim();
-  if (!t) return false;
-  // Keep real short tech names; drop accidental splits like "A" from "A/B".
-  if (t.length <= 1) return BOLD_TERM_ALLOW_SINGLE.has(t.toLowerCase());
-  if (t.length === 2 && /^[a-z]{2}$/i.test(t)) {
-    return BOLD_TERM_ALLOW_SINGLE.has(t.toLowerCase());
-  }
-  return true;
-}
-
-/** Bold whole-token matches of skill terms inside text (markdown **). */
-export function boldSkillTermsWholeToken(text: string, skillTerms: string[]): string {
-  if (!text || skillTerms.length === 0) return text;
-
-  const terms = [
-    ...new Set(skillTerms.map((t) => t.trim()).filter(isBoldableSkillTerm)),
-  ].sort((a, b) => b.length - a.length);
-
-  let result = text;
-  for (const term of terms) {
-    // Prefer matching slash-compounds (A/B) as one token when the term includes "/".
-    const re = new RegExp(`(?<!\\*)\\b(${escapeRegExp(term)})\\b(?!\\*)`, "gi");
-    result = result.replace(re, (match, _g1, offset: number, full: string) => {
-      const before = full.slice(Math.max(0, offset - 2), offset);
-      const after = full.slice(offset + match.length, offset + match.length + 2);
-      if (before === "**" || after.startsWith("**")) {
-        return match;
-      }
-      return `**${match}**`;
-    });
-  }
-  return result;
-}
-
-export function collectSkillTermsFromSkillsBlock(skills: string): string[] {
-  const terms: string[] = [];
-  for (const line of skills.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const colon = trimmed.indexOf(":");
-    const value = colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
-    // Split only on commas/semicolons — NEVER on "/" or "|"
-    // (otherwise "A/B Testing" becomes term "A" and bolds every standalone A).
-    for (const part of value.split(/[,;·•|/]+/)) {
-      const t = part.replace(/\*\*/g, "").trim();
-      if (isBoldableSkillTerm(t)) terms.push(t);
-    }
-  }
-  return terms;
-}
 
 const CATEGORY_LINE_RE = /^([^:]{2,40}):\s*(.*)$/;
 

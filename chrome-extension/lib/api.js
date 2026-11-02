@@ -23,7 +23,22 @@ async function request(path, options = {}) {
     body = { error: text };
   }
   if (!res.ok) {
-    const msg = body?.error || body?.message || `HTTP ${res.status}`;
+    const details = body?.details || body?.errors;
+    let detailMsg = "";
+    if (details && typeof details === "object") {
+      const parts = [];
+      for (const [key, val] of Object.entries(details)) {
+        const text = Array.isArray(val) ? val.join("; ") : String(val || "");
+        if (text) parts.push(`${key}: ${text}`);
+      }
+      if (parts.some((p) => /dataBase64|too big|max/i.test(p))) {
+        detailMsg = "Screenshot file is too large. Try a smaller crop or JPEG.";
+      } else if (parts.length) {
+        detailMsg = parts.slice(0, 3).join(" · ");
+      }
+    }
+    const msg =
+      detailMsg || body?.error || body?.message || `HTTP ${res.status}`;
     throw new Error(msg);
   }
   return body;
@@ -33,34 +48,9 @@ export function fetchMe() {
   return request("/extension/me");
 }
 
-export function uploadApplicationCapture(payload) {
+/** Apply-gate screenshot → ApplicationCaptureSession. */
+export function createApplicationCapture(payload) {
   return request("/extension/application-captures", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function listCaptures(opts = {}) {
-  const page = opts.page || 1;
-  const limit = opts.limit || 20;
-  return request(
-    `/extension/application-captures?page=${page}&limit=${limit}`
-  );
-}
-
-export function getCapture(id) {
-  return request(`/extension/application-captures/${id}`);
-}
-
-export function deleteCapture(id) {
-  return request(`/extension/application-captures/${id}`, {
-    method: "DELETE",
-  });
-}
-
-/** @deprecated legacy live Q&A */
-export function syncApplicationQa(payload) {
-  return request("/extension/application-qa/sync", {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -1,11 +1,15 @@
 import {
   PutObjectCommand,
+  DeleteObjectCommand,
+  PutBucketCorsCommand,
   S3Client,
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env, backblazeEnabled } from "../config/env";
+import { ALLOWED_FRONTEND_ORIGINS } from "../config/frontend";
 import { AppError } from "../middleware/errorHandler";
+import { logger } from "../lib/logger";
 
 export { backblazeEnabled };
 
@@ -171,6 +175,92 @@ export async function uploadDocxToBackblaze(input: {
   return { key: uploaded.key, docxUrl: uploaded.url };
 }
 
+/** Application capture screenshots (JPEG or PNG). */
+export async function uploadCaptureImageToBackblaze(input: {
+  userId: string;
+  captureId: string;
+  fileName: string;
+  buffer: Buffer;
+  contentType?: string;
+}): Promise<{ key: string; imageUrl: string }> {
+  const key = `application-captures/${input.userId}/${input.captureId}/${sanitizeObjectName(input.fileName)}`;
+  const auth = await authorizeB2();
+  const client = await getS3Client();
+  const contentType =
+    input.contentType === "image/png" ? "image/png" : "image/jpeg";
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: env.B2_BUCKET!,
+      Key: key,
+      Body: input.buffer,
+      ContentType: contentType,
+      ContentDisposition: `inline; filename="${sanitizeObjectName(input.fileName)}"`,
+    })
+  );
+
+  const friendlyUrl = buildFriendlyUrl(auth.downloadUrl, key);
+  return { key, imageUrl: friendlyUrl };
+}
+
+/**
+ * rrweb event payload for a session.
+ * Prefer gzip buffer + `.json.gz` key (Content-Type application/gzip).
+ */
+export async function uploadRrwebEventsToBackblaze(input: {
+  userId: string;
+  sessionId: string;
+  buffer: Buffer;
+  /** When true (default), store as events.json.gz */
+  gzip?: boolean;
+}): Promise<{ key: string; eventsUrl: string }> {
+  const useGzip = input.gzip !== false;
+  const key = useGzip
+    ? `rrweb-sessions/${input.userId}/${input.sessionId}/events.json.gz`
+    : `rrweb-sessions/${input.userId}/${input.sessionId}/events.json`;
+  const auth = await authorizeB2();
+  const client = await getS3Client();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: env.B2_BUCKET!,
+      Key: key,
+      Body: input.buffer,
+      ContentType: useGzip ? "application/gzip" : "application/json",
+      ContentDisposition: useGzip
+        ? `inline; filename="events.json.gz"`
+        : `inline; filename="events.json"`,
+      ...(useGzip ? { ContentEncoding: "gzip" } : {}),
+    })
+  );
+
+  const friendlyUrl = buildFriendlyUrl(auth.downloadUrl, key);
+  return { key, eventsUrl: friendlyUrl };
+}
+
+/** Best-effort delete of a B2 object by storage key (ignores missing objects). */
+export async function deleteBackblazeObjectByKey(key: string): Promise<void> {
+  const trimmed = String(key || "").trim();
+  if (!trimmed || !backblazeEnabled) return;
+  try {
+    const client = await getS3Client();
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: env.B2_BUCKET!,
+        Key: trimmed,
+      })
+    );
+  } catch {
+    // ignore — DB row is source of truth for the gallery
+  }
+}
+
+/** Best-effort delete from a stored friendly/S3 URL. */
+export async function deleteBackblazeObjectByUrl(fileUrl: string): Promise<void> {
+  const key = extractKeyFromBackblazeUrl(fileUrl);
+  if (key) await deleteBackblazeObjectByKey(key);
+}
+
 /** Extract object key from a B2 friendly or S3-style URL. */
 function extractKeyFromBackblazeUrl(fileUrl: string): string | null {
   try {
@@ -193,6 +283,81 @@ function extractKeyFromBackblazeUrl(fileUrl: string): string | null {
     return null;
   }
   return null;
+}
+
+/**
+ * S3-compatible presigned GET — best for browser direct download when bucket
+ * CORS allows the frontend origin (one hop, no API proxy).
+ */
+export async function createBackblazePresignedGetUrl(
+  storedUrl: string
+): Promise<string> {
+  const key = extractKeyFromBackblazeUrl(storedUrl);
+  if (!key || !backblazeEnabled) {
+    return storedUrl;
+  }
+  const client = await getS3Client();
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: env.B2_BUCKET!,
+      Key: key,
+    }),
+    {
+      expiresIn: Math.min(
+        Math.max(1, env.B2_PRESIGN_EXPIRES_SECONDS),
+        604_800
+      ),
+    }
+  );
+}
+
+/**
+ * Ensure the B2 bucket allows browser GET from Devora frontend origins.
+ * Required for Super Admin to fetch signed `eventsUrl` directly (faster than API proxy).
+ * Best-effort — logs and continues if the key lacks cors:write.
+ */
+export async function ensureBackblazeBrowserCors(): Promise<void> {
+  if (!backblazeEnabled) return;
+  const origins = ALLOWED_FRONTEND_ORIGINS.filter(Boolean);
+  if (!origins.length) return;
+
+  try {
+    const client = await getS3Client();
+    await client.send(
+      new PutBucketCorsCommand({
+        Bucket: env.B2_BUCKET!,
+        CORSConfiguration: {
+          CORSRules: [
+            {
+              AllowedHeaders: ["*"],
+              AllowedMethods: ["GET", "HEAD"],
+              AllowedOrigins: origins,
+              ExposeHeaders: [
+                "Content-Length",
+                "Content-Type",
+                "Content-Encoding",
+                "ETag",
+                "Accept-Ranges",
+              ],
+              MaxAgeSeconds: 3600,
+            },
+          ],
+        },
+      })
+    );
+    logger.info(
+      "backblaze",
+      `Browser CORS applied for ${origins.length} origin(s) on bucket ${env.B2_BUCKET}`
+    );
+  } catch (err) {
+    logger.warn(
+      "backblaze",
+      `Could not set bucket CORS (direct eventsUrl may fail in browser): ${
+        err instanceof Error ? err.message : err
+      }`
+    );
+  }
 }
 
 /**

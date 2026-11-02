@@ -4,7 +4,9 @@ import { AppError } from "../middleware/errorHandler";
 import { deriveCompanyName } from "../lib/application-qa-company";
 import {
   isSensitiveField,
+  matchedQuestionStorageKey,
   normalizeElementKey,
+  normalizeQuestionKey,
 } from "../lib/application-qa-sensitive";
 import { publishApplicationQaEvent } from "../lib/application-qa-events";
 import {
@@ -201,11 +203,27 @@ function mapSession(
 
   if (opts?.includeItems !== false && session.items) {
     const mapped = session.items.map(mapItem);
-    const matched = mapped.filter((i) => i.matchStatus === "matched");
+    // One row per normalized question — keep the newest answer.
+    const matchedDeduped = (() => {
+      const byQ = new Map<string, (typeof mapped)[number]>();
+      const matchedRows = mapped
+        .filter((i) => i.matchStatus === "matched")
+        .sort((a, b) => {
+          const ta = Date.parse(a.updatedAt || a.occurredAt || "") || 0;
+          const tb = Date.parse(b.updatedAt || b.occurredAt || "") || 0;
+          return ta - tb;
+        });
+      for (const row of matchedRows) {
+        const q = row.matchedQuestion || row.question || "";
+        const key = normalizeQuestionKey(q) || row.elementKey;
+        byQ.set(key, row);
+      }
+      return Array.from(byQ.values());
+    })();
     const unmatched = mapped.filter((i) => i.matchStatus !== "matched");
     base.inputEvents = mapped;
     base.input_events = mapped;
-    base.matchedQa = matched.map((i) => ({
+    base.matchedQa = matchedDeduped.map((i) => ({
       id: i.id,
       elementKey: i.elementKey,
       question: i.matchedQuestion || i.question,
@@ -219,11 +237,11 @@ function mapSession(
       updatedAt: i.updatedAt,
     }));
     base.unmatchedEvents = unmatched;
-    base.matchedCount = matched.length;
+    base.matchedCount = matchedDeduped.length;
     base.unmatchedCount = unmatched.length;
     // Legacy aliases
-    base.questionsAnswers = matched.length
-      ? matched.map((i) => ({
+    base.questionsAnswers = matchedDeduped.length
+      ? matchedDeduped.map((i) => ({
           id: i.id,
           question: i.matchedQuestion || i.question,
           answer: i.answer,
@@ -232,7 +250,7 @@ function mapSession(
         }))
       : mapped;
     base.questions_answers = (
-      matched.length ? matched : mapped
+      matchedDeduped.length ? matchedDeduped : mapped
     ).map((i) => ({
       question: i.matchedQuestion || i.question,
       answer: i.answer,
@@ -353,21 +371,51 @@ export async function syncApplicationQa(
         ? (ev.domContext as Prisma.InputJsonValue)
         : undefined;
 
-    const prior = await prisma.applicationQaItem.findUnique({
+    const priorSelect = {
+      id: true,
+      questionKey: true,
+      answer: true,
+      question: true,
+      matchStatus: true,
+      matchConfidence: true,
+      elementLabel: true,
+    } as const;
+
+    // Prefer DOM key, then cached matched-question key (same question → one row).
+    let prior = await prisma.applicationQaItem.findUnique({
       where: {
         sessionId_questionKey: {
           sessionId: session.id,
           questionKey: elementKey,
         },
       },
-      select: {
-        answer: true,
-        question: true,
-        matchStatus: true,
-        matchConfidence: true,
-        elementLabel: true,
-      },
+      select: priorSelect,
     });
+    if (!prior && ev.cachedQuestion?.trim()) {
+      const qKey = matchedQuestionStorageKey(ev.cachedQuestion);
+      if (qKey) {
+        prior = await prisma.applicationQaItem.findUnique({
+          where: {
+            sessionId_questionKey: {
+              sessionId: session.id,
+              questionKey: qKey,
+            },
+          },
+          select: priorSelect,
+        });
+      }
+      if (!prior) {
+        const qNorm = normalizeQuestionKey(ev.cachedQuestion);
+        const siblings = await prisma.applicationQaItem.findMany({
+          where: { sessionId: session.id, matchStatus: "matched" },
+          select: priorSelect,
+        });
+        prior =
+          siblings.find(
+            (s) => normalizeQuestionKey(s.question) === qNorm
+          ) || null;
+      }
+    }
 
     // Identical payload — no write / no AI.
     if (prior && prior.answer === value && !ev.forceMatch) {
@@ -403,6 +451,7 @@ export async function syncApplicationQa(
       const isChoice =
         (fieldType || "").toLowerCase() === "checkbox" ||
         (fieldType || "").toLowerCase() === "radio" ||
+        (fieldType || "").toLowerCase() === "dropdown" ||
         (elementTag || "") === "select";
       const emptyText = !String(value).trim() && !isChoice;
 
@@ -463,16 +512,61 @@ export async function syncApplicationQa(
         prior.matchStatus === "matched" ? prior.question : elementLabel;
     }
 
+    // Matched rows upsert by question identity so the same question updates in place.
+    const storageKey =
+      matchStatus === "matched"
+        ? matchedQuestionStorageKey(questionText) || elementKey
+        : elementKey;
+
+    if (matchStatus === "matched") {
+      const qNorm = normalizeQuestionKey(questionText);
+      if (qNorm) {
+        const siblings = await prisma.applicationQaItem.findMany({
+          where: {
+            sessionId: session.id,
+            matchStatus: "matched",
+            NOT: { questionKey: storageKey },
+          },
+          select: { id: true, question: true, questionKey: true },
+        });
+        const dupeIds = siblings
+          .filter((s) => normalizeQuestionKey(s.question) === qNorm)
+          .map((s) => s.id);
+        if (dupeIds.length) {
+          await prisma.applicationQaItem.deleteMany({
+            where: { id: { in: dupeIds } },
+          });
+        }
+      }
+      // Drop legacy DOM-keyed row once we store under q:…
+      if (storageKey !== elementKey) {
+        await prisma.applicationQaItem.deleteMany({
+          where: {
+            sessionId: session.id,
+            questionKey: elementKey,
+          },
+        });
+      }
+    }
+
+    const attrWithElementKey =
+      attributes === Prisma.JsonNull
+        ? ({ elementKey } as Prisma.InputJsonValue)
+        : ({
+            ...(attrBag as Record<string, string>),
+            elementKey,
+          } as Prisma.InputJsonValue);
+
     await prisma.applicationQaItem.upsert({
       where: {
         sessionId_questionKey: {
           sessionId: session.id,
-          questionKey: elementKey,
+          questionKey: storageKey,
         },
       },
       create: {
         sessionId: session.id,
-        questionKey: elementKey,
+        questionKey: storageKey,
         question: questionText,
         answer: value,
         fieldType,
@@ -482,7 +576,7 @@ export async function syncApplicationQa(
         elementId,
         elementName,
         elementClass,
-        attributes,
+        attributes: attrWithElementKey,
         occurredAt,
         matchStatus,
         matchConfidence,
@@ -499,7 +593,7 @@ export async function syncApplicationQa(
         elementId,
         elementName,
         elementClass,
-        attributes,
+        attributes: attrWithElementKey,
         occurredAt,
         matchStatus,
         matchConfidence,

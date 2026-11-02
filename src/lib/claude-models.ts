@@ -1,24 +1,26 @@
 import { env } from "../config/env";
 import { AppError } from "../middleware/errorHandler";
 
-export type ClaudeModelFamily = "haiku" | "sonnet" | "opus";
+export type AiModelProvider = "anthropic" | "openai";
+
+export type ClaudeModelFamily = "haiku" | "sonnet" | "opus" | "gpt";
 
 export type ClaudeModelCatalogEntry = {
   id: string;
   label: string;
   family: ClaudeModelFamily;
   description: string;
+  provider: AiModelProvider;
   isDefault?: boolean;
 };
 
-/** Sole allowlisted model for resume + AI helpers. */
-export const FALLBACK_DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5";
+/** Default resume model when env is unset. */
+export const FALLBACK_DEFAULT_CLAUDE_MODEL = "gpt-6-luna";
 
 /**
- * Server allowlist of Anthropic model ids the resume pipeline may call.
- * Only Haiku 5.5 is enabled.
+ * Server allowlist of model ids the resume / AI pipeline may call.
  */
-export const CLAUDE_MODEL_ALLOWLIST = ["claude-haiku-5-5"] as const;
+export const CLAUDE_MODEL_ALLOWLIST = ["gpt-6-luna"] as const;
 
 export type AllowedClaudeModelId = (typeof CLAUDE_MODEL_ALLOWLIST)[number];
 
@@ -26,10 +28,11 @@ const ALLOWLIST_SET = new Set<string>(CLAUDE_MODEL_ALLOWLIST);
 
 export const CLAUDE_MODEL_CATALOG: ClaudeModelCatalogEntry[] = [
   {
-    id: "claude-haiku-5-5",
-    label: "Haiku 5.5",
-    family: "haiku",
-    description: "Fast · resume drafting and extraction",
+    id: "gpt-6-luna",
+    label: "GPT-6 Luna",
+    family: "gpt",
+    provider: "openai",
+    description: "OpenAI · efficient high-volume resume drafting (default)",
     isDefault: true,
   },
 ];
@@ -57,9 +60,22 @@ export function isAllowedClaudeModel(modelId: string): boolean {
   return ALLOWLIST_SET.has(modelId.trim());
 }
 
+export function isOpenAiModel(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  if (id.startsWith("gpt-") || id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4")) {
+    return true;
+  }
+  const entry = CLAUDE_MODEL_CATALOG.find((m) => m.id === modelId.trim());
+  return entry?.provider === "openai";
+}
+
+export function getModelProvider(modelId: string): AiModelProvider {
+  return isOpenAiModel(modelId) ? "openai" : "anthropic";
+}
+
 /**
  * Resolve a request model id.
- * - missing / empty → default (claude-haiku-5-5 or env)
+ * - missing / empty → default (gpt-6-luna or env)
  * - unknown → 400 (never silently remap)
  */
 export function resolveClaudeModel(raw?: string | null): string {
@@ -68,7 +84,7 @@ export function resolveClaudeModel(raw?: string | null): string {
     return getDefaultClaudeModel();
   }
   if (!isAllowedClaudeModel(trimmed)) {
-    throw new AppError(400, `Unsupported Claude model: ${trimmed}`);
+    throw new AppError(400, `Unsupported AI model: ${trimmed}`);
   }
   return trimmed;
 }
@@ -97,6 +113,7 @@ export function modelSupportsDisabledThinking(modelId: string): boolean {
 export function getClaudeThinkingConfig(
   modelId: string
 ): { type: "between_tools" } | { type: "disabled" } | undefined {
+  if (isOpenAiModel(modelId)) return undefined;
   if (modelSupportsBetweenToolsThinking(modelId)) {
     return { type: "between_tools" };
   }
@@ -106,18 +123,18 @@ export function getClaudeThinkingConfig(
   return undefined;
 }
 
-/** Absolute max we ever request (Haiku 5.5 supports up to 128k). */
+/** Absolute max we ever request. */
 export const CLAUDE_MAX_OUTPUT_TOKENS_CEILING = 128_000;
 
-/** Haiku 5.5 Anthropic output ceiling. */
+/** Haiku 5.5 / GPT-6 Luna output ceiling. */
 export const CLAUDE_HAIKU_MAX_OUTPUT_TOKENS = 128_000;
 
 /**
- * Per-model Anthropic max_tokens ceiling.
+ * Per-model max output tokens ceiling.
  */
 export function getClaudeMaxOutputTokens(modelId: string): number {
   const id = modelId.trim().toLowerCase();
-  if (id.includes("haiku")) {
+  if (id.includes("haiku") || id.includes("gpt-6-luna") || id.startsWith("gpt-")) {
     return CLAUDE_HAIKU_MAX_OUTPUT_TOKENS;
   }
   return CLAUDE_MAX_OUTPUT_TOKENS_CEILING;

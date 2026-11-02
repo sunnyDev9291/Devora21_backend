@@ -320,10 +320,13 @@ export function extractTextBulletPrefix(pXml: string): string {
  * (w:numPr inside pPr via replaceParagraphContent) and any literal text bullet.
  */
 export function setExpSectionBulletText(pXml: string, text: string): string {
-  const cleaned = stripLeadingBulletMarker(text);
+  const cleaned = stripLeadingBulletMarker(stripMarkdownBoldMarkers(text));
   const prefix = extractTextBulletPrefix(pXml);
-  // numPr lives in pPr and is kept by setParagraphMarkdown / replaceParagraphContent.
-  return setParagraphMarkdown(pXml, prefix ? `${prefix}${cleaned}` : cleaned);
+  // Plain text only — no **markdown** bold runs in experience bullets.
+  // numPr lives in pPr and is kept by replaceParagraphContent.
+  return setParagraphPlain(pXml, prefix ? `${prefix}${cleaned}` : cleaned, {
+    boldMode: "off",
+  });
 }
 
 export type SkillCategoryFillMode = "tab-hanging";

@@ -9,6 +9,7 @@ import aiRoutes from "./routes/ai.routes";
 import jobRoutes from "./routes/job.routes";
 import logsRoutes from "./routes/logs.routes";
 import extensionRoutes from "./routes/extension.routes";
+import applicationCaptureRoutes from "./routes/application-capture.routes";
 import { errorHandler } from "./middleware/errorHandler";
 import { requestLogger } from "./middleware/request-logger";
 import { ALLOWED_FRONTEND_ORIGINS } from "./config/frontend";
@@ -51,8 +52,8 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 app.use(passport.initialize());
 app.use(requestLogger);
@@ -72,6 +73,7 @@ app.get("/health", (_req, res) => {
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/extension", extensionRoutes);
+app.use("/application-captures", applicationCaptureRoutes);
 app.use("/resume", resumeRoutes);
 app.use("/ai", aiRoutes);
 app.use("/jobs", jobRoutes);

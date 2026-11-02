@@ -1,8 +1,9 @@
 import { Response, NextFunction } from "express";
-import { claudeEnabled } from "../config/env";
+import { claudeEnabled, openAiEnabled, aiMockEnabled } from "../config/env";
 import { ALLOWED_FRONTEND_ORIGINS } from "../config/frontend";
 import {
   getClaudeMaxOutputTokens,
+  getModelProvider,
   listClaudeModelsResponse,
   resolveClaudeModel,
 } from "../lib/claude-models";
@@ -16,8 +17,18 @@ import type { AuthenticatedRequest } from "../middleware/auth";
 import type { ChatCompletionsInput, ClaudeChatInput } from "../validators/ai.validator";
 import { buildResumeGeneratePrompt } from "../services/resume-generate.service";
 
-function serviceUnavailable(res: Response): void {
-  res.status(503).json({ error: "Claude API is not configured" });
+function serviceUnavailable(res: Response, provider: "openai" | "anthropic"): void {
+  res.status(503).json({
+    error:
+      provider === "openai"
+        ? "OpenAI API is not configured"
+        : "Claude API is not configured",
+  });
+}
+
+function aiProviderReady(provider: "openai" | "anthropic"): boolean {
+  if (aiMockEnabled) return true;
+  return provider === "openai" ? openAiEnabled : claudeEnabled;
 }
 
 /** Use the selected model's Anthropic output ceiling (Haiku 64k, others up to 128k). */
@@ -283,11 +294,6 @@ export async function chatCompletionsHandler(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  if (!claudeEnabled) {
-    serviceUnavailable(res);
-    return;
-  }
-
   const body = req.body as ChatCompletionsInput;
   const startedAt = Date.now();
   let input: ClaudeChatInput;
@@ -298,6 +304,11 @@ export async function chatCompletionsHandler(
 
   try {
     modelId = resolveClaudeModel(body.model);
+    const provider = getModelProvider(modelId);
+    if (!aiProviderReady(provider)) {
+      serviceUnavailable(res, provider);
+      return;
+    }
     // Only literal JSON boolean true means resume generation.
     if (body.jsonObject === true) {
       const jobContext = extractJobContext(req, body);

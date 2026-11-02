@@ -63,12 +63,15 @@ const envSchema = z.object({
 
   CLAUDE_API_KEY: z.string().optional(),
   /**
-   * Default Anthropic model when the client omits `model`.
+   * Default resume AI model when the client omits `model`.
    * Must be on the server allowlist (see lib/claude-models.ts).
+   * Example: gpt-6-luna
    */
   RESUME_AI_MODEL: z.string().optional(),
   /** Alias for RESUME_AI_MODEL. */
   CLAUDE_DEFAULT_MODEL: z.string().optional(),
+  /** OpenAI API key (server-side only). */
+  OPENAI_API_KEY: z.string().optional(),
   /** When true, /ai chat endpoints return mocked resume content (no Claude call). */
   AI_MOCK: z
     .enum(["true", "false"])
@@ -102,6 +105,12 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   B2_PRESIGN_EXPIRES_SECONDS: z.coerce.number().int().positive().default(60 * 60 * 24 * 7),
+
+  /**
+   * Soft-delete rrweb sessions whose startedAt is older than this many days.
+   * Also removes B2 event objects. Default 10.
+   */
+  RRWEB_SESSION_RETENTION_DAYS: z.coerce.number().int().positive().default(10),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -147,6 +156,7 @@ export function isSuperAdminUser(user: {
 
 export const aiMockEnabled = env.AI_MOCK;
 export const claudeEnabled = aiMockEnabled || Boolean(env.CLAUDE_API_KEY);
+export const openAiEnabled = Boolean(env.OPENAI_API_KEY);
 export const deepseekEnabled = Boolean(env.DEEPSEEK_API_KEY);
 export const zyteEnabled = Boolean(env.ZYTE_API_KEY);
 export const backblazeEnabled =

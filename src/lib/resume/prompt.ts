@@ -1,5 +1,4 @@
 import type { ResumeTemplateLayout, TemplateJobSkeleton } from "./types";
-import { resumeJsonOutputContract } from "./output-contract";
 
 function countSkillCategorySlots(skillsSample: string): number {
   const lines = skillsSample
@@ -93,7 +92,8 @@ export function buildResumeSystemPrompt(
 
 /**
  * Single user message for Mode-1 resume generation:
- * Job title → JD → template slot counts → profile prompt → output JSON shape.
+ * Job title → JD → template slot counts → profile writing prompt.
+ * JSON output shape must live in the profile prompt (not appended here).
  */
 export function buildResumeUserPrompt(input: {
   jobTitle: string;
@@ -117,17 +117,7 @@ export function buildResumeUserPrompt(input: {
     `Skill Category count : ${categoryCount}`,
     "",
     input.customPrompt.trim(),
-    "",
-    `Output structure:`,
-    "Return ONLY one valid JSON object (no markdown fences, no commentary).",
-    resumeJsonOutputShapeOnly(input.layout),
   ];
 
   return parts.join("\n");
-}
-
-/** Compact JSON shape block (matches Mode-1 render contract). */
-function resumeJsonOutputShapeOnly(layout: ResumeTemplateLayout): string {
-  // Reuse full contract text; it already includes the shape the user requested.
-  return resumeJsonOutputContract(layout);
 }

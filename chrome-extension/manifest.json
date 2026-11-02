@@ -1,23 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Devora21 Application Capture",
-  "version": "3.2.5",
-  "description": "On Submit click, capture the application page as compressed grayscale screenshots and sync to Devora21.",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "tabs",
-    "sidePanel",
-    "webNavigation"
-  ],
+  "name": "Devora21 Apply Gate",
+  "version": "6.0.9",
+  "description": "Requires a screenshot (file or Ctrl/Cmd+V paste) before Submit / Apply / Send; uploads to Devora21 Super Admin Application Captures.",
+  "permissions": ["storage", "activeTab", "tabs", "sidePanel", "clipboardRead"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Devora21 Capture — open sidebar",
+    "default_title": "Devora21 Apply Gate",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -36,10 +29,9 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["lib/detect-apply.js", "content.js"],
+      "js": ["lib/apply-gate.js"],
       "run_at": "document_idle",
-      "all_frames": true,
-      "match_about_blank": true
+      "all_frames": true
     }
   ]
 }

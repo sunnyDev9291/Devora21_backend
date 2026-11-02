@@ -11,12 +11,25 @@ const SENSITIVE_TYPES = new Set([
   "hidden",
 ]);
 
+/**
+ * Canonical question identity for dedupe within a session.
+ * "Country / Region" and "Country/Region" collapse to the same key.
+ */
 export function normalizeQuestionKey(question: string): string {
-  return question
+  return String(question || "")
     .trim()
     .toLowerCase()
+    .replace(/[/\\|,_.:;–—-]+/g, " ")
+    .replace(/[^a-z0-9\s]+/g, " ")
     .replace(/\s+/g, " ")
+    .trim()
     .slice(0, 500);
+}
+
+/** Storage key for a matched question row (stable across different DOM elements). */
+export function matchedQuestionStorageKey(question: string): string {
+  const n = normalizeQuestionKey(question);
+  return n ? `q:${n}` : "";
 }
 
 /** Stable element key for upsert / dedupe within a session. */

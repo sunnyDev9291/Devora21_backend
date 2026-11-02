@@ -38,6 +38,7 @@
     "passport-google-oauth20": "^2.0.0",
     "passport-oauth2": "^1.8.0",
     "pizzip": "^3.2.0",
+    "rrweb": "^2.0.0-alpha.4",
     "uuid": "^11.1.0",
     "zod": "^3.25.67"
   },

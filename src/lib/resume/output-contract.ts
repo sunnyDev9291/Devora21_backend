@@ -1,5 +1,6 @@
 /**
- * Minimal JSON shape only. All content/style rules live in the profile writing prompt.
+ * @deprecated Not appended to AI prompts anymore — put JSON output shape in the
+ * profile writing prompt. Kept as a reference copy of the Mode-1 contract.
  * Key order = create order: title → summary → experiences → skills → fileName.
  */
 export function resumeJsonOutputContract(layout: "bullets" | "projects" = "bullets"): string {

@@ -5,11 +5,7 @@ import type {
   ResumeTemplateLayout,
   TemplateJobSkeleton,
 } from "./types";
-import {
-  boldSkillTermsWholeToken,
-  collectSkillTermsFromSkillsBlock,
-  formatSkillsToTemplateStyle,
-} from "./skills-style";
+import { formatSkillsToTemplateStyle } from "./skills-style";
 import { resolveResumeFileName } from "./filename";
 import { normalizeResumeAiJson } from "./normalize-ai-json";
 import {
@@ -239,15 +235,14 @@ export function applyContentPostProcess(
     }
   }
 
-  const skillTerms = collectSkillTermsFromSkillsBlock(next.skills);
-  // Keyword bold (**term**) only in experience bullet sentences at render time.
+  // No keyword bold on experience bullets (or elsewhere) — plain text only.
   next.summary = stripMarkdownBoldMarkers(next.summary);
   next.title = stripMarkdownBoldMarkers(next.title);
   next.skills = stripMarkdownBoldMarkers(next.skills);
   next.experiences = next.experiences.map((exp) => ({
     ...exp,
     role: stripMarkdownBoldMarkers(exp.role),
-    bullets: exp.bullets.map((b) => boldSkillTermsWholeToken(b, skillTerms)),
+    bullets: exp.bullets.map((b) => stripMarkdownBoldMarkers(b)),
     projects: exp.projects?.map((p) => ({
       ...p,
       businessChallenge: stripMarkdownBoldMarkers(p.businessChallenge),

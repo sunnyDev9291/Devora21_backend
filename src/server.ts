@@ -7,6 +7,7 @@ import {
   emailVerificationRequired,
   rateLimitEnabled,
   claudeEnabled,
+  openAiEnabled,
   aiMockEnabled,
   zyteEnabled,
   deepseekEnabled,
@@ -18,6 +19,7 @@ import { prisma } from "./lib/prisma";
 
 import { logger } from "./lib/logger";
 import { CLAUDE_MODEL } from "./services/claude.service";
+import { ensureBackblazeBrowserCors } from "./services/backblaze.service";
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -39,11 +41,14 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
   console.log(
     `Claude AI: ${claudeEnabled ? (aiMockEnabled ? "MOCK enabled" : "enabled") : "not configured"}`
   );
-  if (claudeEnabled) {
+  console.log(
+    `OpenAI: ${openAiEnabled ? (aiMockEnabled ? "MOCK enabled" : "enabled") : "not configured"}`
+  );
+  if (claudeEnabled || openAiEnabled || aiMockEnabled) {
     if (aiMockEnabled) {
-      console.log("  AI responses: mocked (no Claude API calls)");
+      console.log("  AI responses: mocked (no upstream API calls)");
     } else {
-      console.log(`  Default model: ${CLAUDE_MODEL} (plain-text stream; GET /ai/models for catalog)`);
+      console.log(`  Default resume model: ${CLAUDE_MODEL} (GET /ai/models for catalog)`);
     }
     console.log(
       `  AI internal auth: ${env.AI_INTERNAL_API_KEY ? "required (Bearer token)" : "open (local dev only)"}`
@@ -51,7 +56,7 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
   }
   console.log(`Zyte scrape: ${zyteEnabled ? "enabled" : "not configured"}`);
   console.log(
-    `Job normalize / QA match: Claude Haiku 5.5 (${claudeEnabled ? "enabled" : "not configured"}; DeepSeek legacy key present=${deepseekEnabled})`
+    `Job normalize / QA match: default ${CLAUDE_MODEL} (Claude key=${claudeEnabled ? "yes" : "no"}; OpenAI key=${openAiEnabled ? "yes" : "no"}; DeepSeek legacy=${deepseekEnabled})`
   );
   console.log(`Backblaze B2 PDF host: ${backblazeEnabled ? "enabled" : "not configured"}`);
   console.log(`Auth rate limit: ${rateLimitEnabled ? "enabled" : "disabled"}`);
@@ -64,6 +69,11 @@ const server = app.listen(env.PORT, "0.0.0.0", async () => {
     }
   } else {
     console.log(`  Verification emails log to console until SMTP_HOST, SMTP_USER, SMTP_PASS are set`);
+  }
+
+  if (backblazeEnabled) {
+    console.log("Backblaze: applying browser CORS for capture image URLs…");
+    void ensureBackblazeBrowserCors();
   }
 });
 

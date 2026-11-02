@@ -1,21 +1,30 @@
 /**
- * Application page detection via configurable SUBMIT_BUTTON_TEXTS.
- * Matches visible text / value / aria-label / title exactly (normalized).
- * Marks via data attribute only. Capture-before-submit hooks unchanged.
+ * Application page detection:
+ *   Email  — user types an email-shaped value into an input (action-based)
+ *   Resume — user selects/uploads a PDF on input[type=file] (action-based)
+ *   Submit — button / page include-match against SUBMIT_BUTTON_TEXTS allowlist
  *
- * The live list is seeded with ["Submit"] and updated from chrome.storage
- * (options UI) via setSubmitButtonTexts — do not hardcode comparisons elsewhere.
+ * All three Yes → application page; capture hooks use submit-list buttons.
+ * Email/Resume Settings lists are unused for detection (action-only).
  */
 (function (global) {
   const MARK_ATTR = "data-devora21-capture-submit";
 
-  /**
-   * Central list of submit-button labels.
-   * Default: ["Submit"]. Options UI add/edit/delete updates this at runtime.
-   * Matching is case-insensitive exact equality after trim / whitespace collapse.
-   */
-  const DEFAULT_SUBMIT_BUTTON_TEXTS = ["Submit"];
+  const DEFAULT_EMAIL_FIELD_TEXTS = ["Email", "E-mail"];
+  const DEFAULT_RESUME_FIELD_TEXTS = ["Resume", "CV"];
+  const DEFAULT_SUBMIT_BUTTON_TEXTS = ["Submit", "Apply", "Send"];
+
+  const EMAIL_FIELD_TEXTS = DEFAULT_EMAIL_FIELD_TEXTS.slice();
+  const RESUME_FIELD_TEXTS = DEFAULT_RESUME_FIELD_TEXTS.slice();
   const SUBMIT_BUTTON_TEXTS = DEFAULT_SUBMIT_BUTTON_TEXTS.slice();
+
+  /** Sticky for this document until reset (navigation / explicit reset). */
+  let emailDetectedByAction = false;
+  let resumeDetectedByAction = false;
+  let emailActionInput = null;
+  let resumeActionInput = null;
+  let actionListenersBound = false;
+  let actionChangeCallback = null;
 
   function normalizeLabel(s) {
     return String(s || "")
@@ -24,7 +33,15 @@
       .toLowerCase();
   }
 
-  function sanitizeSubmitTexts(list) {
+  function normalizeMatchKey(s) {
+    return normalizeLabel(s).replace(/[^a-z0-9]+/g, "");
+  }
+
+  function sanitizeList(list, fallback) {
+    const defaults =
+      Array.isArray(fallback) && fallback.length
+        ? fallback.slice()
+        : ["Submit"];
     const seen = new Set();
     const out = [];
     for (const raw of Array.isArray(list) ? list : []) {
@@ -37,31 +54,176 @@
       seen.add(key);
       out.push(display);
     }
-    return out.length ? out : DEFAULT_SUBMIT_BUTTON_TEXTS.slice();
+    return out.length ? out : defaults;
   }
 
-  /** Replace the live detection list (from storage / options UI). */
+  function replaceList(target, cleaned) {
+    target.length = 0;
+    for (const t of cleaned) target.push(t);
+    return target.slice();
+  }
+
+  function setEmailFieldTexts(list) {
+    return replaceList(
+      EMAIL_FIELD_TEXTS,
+      sanitizeList(list, DEFAULT_EMAIL_FIELD_TEXTS)
+    );
+  }
+
+  function setResumeFieldTexts(list) {
+    return replaceList(
+      RESUME_FIELD_TEXTS,
+      sanitizeList(list, DEFAULT_RESUME_FIELD_TEXTS)
+    );
+  }
+
   function setSubmitButtonTexts(list) {
-    const cleaned = sanitizeSubmitTexts(list);
-    SUBMIT_BUTTON_TEXTS.length = 0;
-    for (const t of cleaned) SUBMIT_BUTTON_TEXTS.push(t);
-    return SUBMIT_BUTTON_TEXTS.slice();
+    return replaceList(
+      SUBMIT_BUTTON_TEXTS,
+      sanitizeList(list, DEFAULT_SUBMIT_BUTTON_TEXTS)
+    );
+  }
+
+  function getEmailFieldTexts() {
+    return EMAIL_FIELD_TEXTS.slice();
+  }
+
+  function getResumeFieldTexts() {
+    return RESUME_FIELD_TEXTS.slice();
   }
 
   function getSubmitButtonTexts() {
     return SUBMIT_BUTTON_TEXTS.slice();
   }
 
-  /** Normalized allowlist — rebuilt from SUBMIT_BUTTON_TEXTS each call. */
-  function normalizedSubmitTexts() {
-    return SUBMIT_BUTTON_TEXTS.map(normalizeLabel).filter(Boolean);
+  function setDetectionAllowLists({
+    emailFieldTexts,
+    resumeFieldTexts,
+    submitButtonTexts,
+  } = {}) {
+    if (emailFieldTexts != null) setEmailFieldTexts(emailFieldTexts);
+    if (resumeFieldTexts != null) setResumeFieldTexts(resumeFieldTexts);
+    if (submitButtonTexts != null) setSubmitButtonTexts(submitButtonTexts);
+    return {
+      emailFieldTexts: getEmailFieldTexts(),
+      resumeFieldTexts: getResumeFieldTexts(),
+      submitButtonTexts: getSubmitButtonTexts(),
+    };
   }
 
-  /** Exact match against SUBMIT_BUTTON_TEXTS after normalization. */
-  function textMatchesSubmitList(raw) {
-    const n = normalizeLabel(raw);
+  function listIncludesMatch(haystack, list) {
+    const n = normalizeMatchKey(haystack);
     if (!n) return false;
-    return normalizedSubmitTexts().includes(n);
+    return list
+      .map(normalizeMatchKey)
+      .filter(Boolean)
+      .some((entry) => n.includes(entry));
+  }
+
+  function textMatchesSubmitList(raw) {
+    return listIncludesMatch(raw, SUBMIT_BUTTON_TEXTS);
+  }
+
+  /** Email-shaped value the user typed (not just presence of an email input). */
+  function looksLikeTypedEmail(value) {
+    const s = String(value || "").trim();
+    if (s.length < 6) return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(s);
+  }
+
+  /** User uploaded a PDF (by MIME or .pdf filename). */
+  function fileIsPdf(file) {
+    if (!file) return false;
+    const name = String(file.name || "").toLowerCase();
+    const type = String(file.type || "").toLowerCase();
+    return type === "application/pdf" || name.endsWith(".pdf");
+  }
+
+  function notifyActionChange() {
+    try {
+      actionChangeCallback?.();
+    } catch {
+      // ignore
+    }
+  }
+
+  function onUserInputEvent(e) {
+    const el = e?.target;
+    if (!(el instanceof HTMLElement)) return;
+
+    // —— Email: typing into a text-like control ——
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const type = String(el.type || "").toLowerCase();
+      if (type === "file" || type === "password" || type === "hidden") {
+        // fall through for file handling below
+      } else if (type === "" || type === "text" || type === "email" || type === "search") {
+        if (looksLikeTypedEmail(el.value)) {
+          if (!emailDetectedByAction || emailActionInput !== el) {
+            emailDetectedByAction = true;
+            emailActionInput = el;
+            notifyActionChange();
+          }
+        }
+      }
+    }
+
+    // —— Resume: file input change / pick PDF ——
+    if (el instanceof HTMLInputElement && String(el.type || "").toLowerCase() === "file") {
+      const files = el.files;
+      if (files && files.length) {
+        let pdf = false;
+        for (let i = 0; i < files.length; i++) {
+          if (fileIsPdf(files[i])) {
+            pdf = true;
+            break;
+          }
+        }
+        if (pdf) {
+          if (!resumeDetectedByAction || resumeActionInput !== el) {
+            resumeDetectedByAction = true;
+            resumeActionInput = el;
+            notifyActionChange();
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Bind document-level listeners (once). Call from content script boot.
+   * onChange is invoked when email/resume action detection flips on.
+   */
+  function startActionDetection(onChange) {
+    actionChangeCallback = typeof onChange === "function" ? onChange : null;
+    if (actionListenersBound) return;
+    actionListenersBound = true;
+    // Capture phase so we see events before site handlers stop them.
+    document.addEventListener("input", onUserInputEvent, true);
+    document.addEventListener("change", onUserInputEvent, true);
+  }
+
+  function stopActionDetection() {
+    if (!actionListenersBound) return;
+    document.removeEventListener("input", onUserInputEvent, true);
+    document.removeEventListener("change", onUserInputEvent, true);
+    actionListenersBound = false;
+    actionChangeCallback = null;
+  }
+
+  function resetActionDetection() {
+    emailDetectedByAction = false;
+    resumeDetectedByAction = false;
+    emailActionInput = null;
+    resumeActionInput = null;
+  }
+
+  function getActionDetectionState() {
+    return {
+      hasEmail: emailDetectedByAction,
+      hasResumeUpload: resumeDetectedByAction,
+      emailInput: emailActionInput,
+      resumeInput: resumeActionInput,
+    };
   }
 
   function visibleText(el) {
@@ -72,40 +234,6 @@
     } catch {
       return "";
     }
-  }
-
-  /**
-   * All label-like strings for a control (visible text + relevant attributes).
-   * Any one matching SUBMIT_BUTTON_TEXTS counts.
-   */
-  function controlLabelCandidates(el) {
-    if (!el) return [];
-    const out = [];
-    if (el.tagName === "INPUT") {
-      out.push(el.value);
-    } else {
-      out.push(visibleText(el));
-    }
-    out.push(el.getAttribute?.("value"));
-    out.push(el.getAttribute?.("aria-label"));
-    out.push(el.getAttribute?.("title"));
-    return out.filter((s) => s != null && String(s).trim() !== "");
-  }
-
-  /** Prefer visible text/value; fall back to aria-label / title. */
-  function controlLabel(el) {
-    const parts = controlLabelCandidates(el);
-    return parts.length ? normalizeLabel(parts[0]) : "";
-  }
-
-  /** True when normalized label exactly equals an entry in SUBMIT_BUTTON_TEXTS. */
-  function isSubmitLabel(label) {
-    return textMatchesSubmitList(label);
-  }
-
-  /** True when any visible text or relevant attribute matches the list. */
-  function controlMatchesSubmitList(el) {
-    return controlLabelCandidates(el).some(textMatchesSubmitList);
   }
 
   function isVisible(el) {
@@ -122,6 +250,33 @@
     } catch {
       return true;
     }
+  }
+
+  function controlLabelCandidates(el) {
+    if (!el) return [];
+    const out = [];
+    if (el.tagName === "INPUT") {
+      out.push(el.value);
+    } else {
+      out.push(visibleText(el));
+    }
+    out.push(el.getAttribute?.("value"));
+    out.push(el.getAttribute?.("aria-label"));
+    out.push(el.getAttribute?.("title"));
+    return out.filter((s) => s != null && String(s).trim() !== "");
+  }
+
+  function controlLabel(el) {
+    const parts = controlLabelCandidates(el);
+    return parts.length ? normalizeLabel(parts[0]) : "";
+  }
+
+  function isSubmitLabel(label) {
+    return textMatchesSubmitList(label);
+  }
+
+  function controlMatchesSubmitList(el) {
+    return controlLabelCandidates(el).some(textMatchesSubmitList);
   }
 
   function isRawSubmitCandidate(el) {
@@ -207,7 +362,6 @@
     return findExistingMarked(root);
   }
 
-  /** Every visible control whose label matches SUBMIT_BUTTON_TEXTS. */
   function findSubmitControls(root = document) {
     const raw = collectRawCandidates(root);
     if (raw.length) return raw;
@@ -215,10 +369,6 @@
     return marked ? [marked] : [];
   }
 
-  /**
-   * Resolve the clicked control using the same list as detection.
-   * Evaluated at event time so React re-renders / lost marks still work.
-   */
   function resolveSubmitControlFromEvent(fromEvent) {
     if (!fromEvent) return null;
     const path =
@@ -239,19 +389,48 @@
     return null;
   }
 
-  /**
-   * @param {Document} doc
-   * @param {{ mark?: boolean }} opts mark=false → detect only (status UI after release)
-   */
+  function getPageContentText(root = document) {
+    try {
+      const doc = root.nodeType === 9 ? root : root.ownerDocument || document;
+      const body = doc.body || doc.documentElement || root;
+      if (!body) return "";
+      return `${doc.title || ""}\n${body.textContent || ""}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function hasSubmitInPage(root = document) {
+    if (collectRawCandidates(root).length > 0) return true;
+    return listIncludesMatch(getPageContentText(root), SUBMIT_BUTTON_TEXTS);
+  }
+
+  function findEmailField() {
+    return emailActionInput;
+  }
+
+  function findResumeField() {
+    return resumeActionInput;
+  }
+
+  function hasEmailField() {
+    return emailDetectedByAction;
+  }
+
+  function hasResumeField() {
+    return resumeDetectedByAction;
+  }
+
   function detectApplyPageSignals(doc = document, opts = {}) {
     const mark = opts.mark !== false;
+    const hasEmail = emailDetectedByAction;
+    const hasResumeUpload = resumeDetectedByAction;
     const all = collectRawCandidates(doc);
-    const primary = all.length
-      ? all[all.length - 1]
-      : findExistingMarked(doc);
+    const hasSubmit = all.length > 0 || hasSubmitInPage(doc);
+    const isApplyPage = hasEmail && hasResumeUpload && hasSubmit;
 
     if (mark) {
-      const keep = new Set(all);
+      const keep = isApplyPage ? new Set(all) : new Set();
       try {
         doc.querySelectorAll?.(`[${MARK_ATTR}="1"]`)?.forEach((el) => {
           if (!keep.has(el)) clearMark(el);
@@ -259,16 +438,22 @@
       } catch {
         // ignore
       }
-      // Mark every list match — any of them must trigger capture on click.
-      for (const el of all) markPrimarySubmit(el);
+      if (isApplyPage) {
+        for (const el of all) markPrimarySubmit(el);
+      }
     }
 
     return {
-      isApplyPage: all.length > 0 || Boolean(primary),
-      submitCount: all.length || (primary ? 1 : 0),
-      hasEmail: false,
-      hasResumeUpload: false,
+      isApplyPage,
+      submitCount: all.length || (hasSubmit ? 1 : 0),
+      hasEmail,
+      hasResumeUpload,
+      hasSubmit,
     };
+  }
+
+  function isApplicationFormPage(doc = document) {
+    return detectApplyPageSignals(doc, { mark: false }).isApplyPage;
   }
 
   function isMarkedCaptureSubmit(el) {
@@ -276,20 +461,36 @@
     return el.getAttribute?.(MARK_ATTR) === "1";
   }
 
-  /**
-   * Capture-hook gate: same criteria as detection (live list), mark optional.
-   * Mark alone is never enough — text must still match SUBMIT_BUTTON_TEXTS.
-   */
   function isSubmitCandidate(el) {
     return isRawSubmitCandidate(el);
   }
 
   global.Devora21DetectApply = {
+    EMAIL_FIELD_TEXTS,
+    RESUME_FIELD_TEXTS,
     SUBMIT_BUTTON_TEXTS,
+    DEFAULT_EMAIL_FIELD_TEXTS,
+    DEFAULT_RESUME_FIELD_TEXTS,
     DEFAULT_SUBMIT_BUTTON_TEXTS,
+    getEmailFieldTexts,
+    getResumeFieldTexts,
     getSubmitButtonTexts,
+    setEmailFieldTexts,
+    setResumeFieldTexts,
     setSubmitButtonTexts,
+    setDetectionAllowLists,
+    startActionDetection,
+    stopActionDetection,
+    resetActionDetection,
+    getActionDetectionState,
+    looksLikeTypedEmail,
+    fileIsPdf,
     detectApplyPageSignals,
+    isApplicationFormPage,
+    findEmailField,
+    findResumeField,
+    hasEmailField,
+    hasResumeField,
     findSubmitControls,
     pickPrimarySubmit,
     resolveSubmitControlFromEvent,

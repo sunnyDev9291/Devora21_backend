@@ -2,20 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Devora21 Capture Settings</title>
+    <title>Devora21 Apply Gate Settings</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main>
-      <h1>Capture settings</h1>
+      <h1>Apply gate settings</h1>
       <p class="lede">
-        Connect the extension to your Devora21 account. Screenshots upload only after you
-        review them in the side panel.
+        Connect to Devora21. When the gate is On, Submit / Apply / Send asks for
+        a screenshot before the site action continues.
       </p>
 
       <label class="consent">
         <input id="consentAccepted" type="checkbox" />
-        I consent to capturing application page screenshots and storing them in Devora21.
+        I consent to uploading apply screenshots to Devora21 for review.
       </label>
 
       <label>
@@ -28,33 +28,9 @@
         <input id="apiKey" type="password" autocomplete="off" placeholder="dv21_…" />
       </label>
 
-      <label>
-        Optional host allowlist (one per line, blank = all sites)
-        <textarea id="allowedHosts" rows="4" placeholder="jobs.ashbyhq.com"></textarea>
-      </label>
-
-      <section class="submit-texts" aria-labelledby="submitTextsHeading">
-        <h2 id="submitTextsHeading">Submit button texts</h2>
-        <p class="hint">
-          Exact match (case-insensitive) against button text, value, aria-label, or title.
-          Add labels like <code>Submit application</code> or <code>Apply Now</code> as needed.
-        </p>
-        <ul id="submitTextsList" class="submit-texts-list"></ul>
-        <div class="submit-texts-add">
-          <input
-            id="submitTextNew"
-            type="text"
-            maxlength="120"
-            placeholder="New label, e.g. Send Application"
-            autocomplete="off"
-          />
-          <button id="submitTextAdd" type="button" class="secondary">Add</button>
-        </div>
-      </section>
-
       <label class="consent">
-        <input id="captureEnabled" type="checkbox" />
-        Enable capture by default
+        <input id="applyGateEnabled" type="checkbox" />
+        Require screenshot before Submit / Apply / Send
       </label>
 
       <div class="row">

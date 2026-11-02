@@ -4,6 +4,7 @@ import {
   CLAUDE_MAX_OUTPUT_TOKENS_CEILING,
   getClaudeMaxOutputTokens,
   getClaudeThinkingConfig,
+  getModelProvider,
   resolveClaudeModel,
 } from "../lib/claude-models";
 import type { ClaudeChatInput } from "../validators/ai.validator";
@@ -11,6 +12,10 @@ import {
   createMockChatCompletion,
   streamMockChatCompletion,
 } from "./mock-ai.service";
+import {
+  createOpenAiChatCompletion,
+  streamOpenAiChatCompletion,
+} from "./openai.service";
 
 const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 /** Default model when the request omits `model` (re-export for boot logs). */
@@ -173,6 +178,11 @@ export async function createChatCompletion(
     return createMockChatCompletion(input);
   }
 
+  const model = resolveRequestModel(input);
+  if (getModelProvider(model) === "openai") {
+    return createOpenAiChatCompletion({ ...input, model });
+  }
+
   // Prefer Claude stream, then assemble full plain text (also strips fences).
   let assembled = "";
   await streamChatCompletion(input, (text) => {
@@ -184,7 +194,7 @@ export async function createChatCompletion(
     throw new Error("Claude returned an empty response");
   }
 
-  return { content, model: resolveRequestModel(input) };
+  return { content, model };
 }
 
 function raceWithTimeout<T>(
@@ -234,6 +244,12 @@ export async function streamChatCompletion(
   if (aiMockEnabled) {
     handlers.onUpstreamReady?.();
     await streamMockChatCompletion(input, handlers.onText);
+    return;
+  }
+
+  const model = resolveRequestModel(input);
+  if (getModelProvider(model) === "openai") {
+    await streamOpenAiChatCompletion({ ...input, model }, handlers);
     return;
   }
 
